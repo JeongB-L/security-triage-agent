@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+trace.jsonl
+__pycache__/
+.venv/
+.pytest_cache/
+.coverage

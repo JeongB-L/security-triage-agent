@@ -1,0 +1,88 @@
+"""Configuration: constants, env settings and MCP server specs (allowlists live with their server)."""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# LLM via OpenRouter (OpenAI-compatible). The key comes from .env only, never hardcoded.
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+MODEL = os.getenv("MODEL", "openai/gpt-4.1-mini")
+MAX_STEPS = 50
+MAX_TOTAL_TOKENS = int(os.getenv("MAX_TOTAL_TOKENS", "1000000"))  # prompt + completion tokens per run
+TIMEOUT_SECONDS = float(os.getenv("TIMEOUT_SECONDS", "60"))  # MCP connect, MCP tool call, LLM call
+MAX_TOOL_OUTPUT_CHARS = 3000  # spec said 2000, but cve_lookup puts EPSS at ~char 2100
+MAX_INPUT_CHARS = 2000
+TRACE_PATH = "trace.jsonl"
+WORKSPACE = str(Path(__file__).parent.resolve() / "workspace")
+
+# Token optimization (truncating tool results) is a separate switch in .env.
+TOKEN_OPTIMIZATION = os.getenv("TOKEN_OPTIMIZATION", "on").strip().lower() not in (
+    "off",
+    "0",
+    "false",
+    "no",
+)
+
+
+@dataclass
+class ServerSpec:
+    """How to reach one MCP server and which of its tools the agent may use."""
+
+    name: str  # becomes the tool prefix
+    transport: str  # "stdio" or "http"
+    allowed_tools: set[str]  # unprefixed
+    write_tools: set[str] = field(default_factory=set)  # unprefixed, approval-gated
+    command: str = ""
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] | None = None
+    url: str = ""
+
+
+def security_spec() -> ServerSpec:
+    """Datakoot Security Intel server spec (remote, streamable HTTP, no key)."""
+    return ServerSpec(
+        "security",
+        "http",
+        url="https://security.datakoot.com/mcp",
+        allowed_tools={
+            "cve_lookup",
+            "epss_score",
+            "package_vulnerabilities",
+            "audit_dependencies",
+        },
+    )
+
+
+def files_spec() -> ServerSpec:
+    """Filesystem server spec, rooted at the workspace directory only."""
+    return ServerSpec(
+        "files",
+        "stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-filesystem", WORKSPACE],
+        allowed_tools={"list_directory", "read_text_file", "write_file"},
+        write_tools={"write_file"},
+    )
+
+
+SERVERS = [security_spec(), files_spec()]
+
+
+def _prefixed(attr: str, servers: list[ServerSpec]) -> set[str]:
+    """Collect one tool-set attribute across servers as server__tool names."""
+    return {f"{s.name}__{t}" for s in servers for t in getattr(s, attr)}
+
+
+def allowed_tools(servers: list[ServerSpec] | None = None) -> set[str]:
+    """Prefixed allowlist for all servers."""
+    return _prefixed("allowed_tools", servers or SERVERS)
+
+
+def write_tools(servers: list[ServerSpec] | None = None) -> set[str]:
+    """Prefixed set of approval-gated write tools."""
+    return _prefixed("write_tools", servers or SERVERS)
