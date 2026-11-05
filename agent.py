@@ -44,7 +44,8 @@ Rules:
   with CVE, CVSS severity, KEV status, EPSS and the exact fix version, taken
   from tool results. Write "not checked" for anything you did not look up.
 - If asked to write a report, call the write tool with the full report in the
-  same turn as your answer. Do not say you will write it later."""
+  same turn as your answer, using the path remediation_report.md. Do not say
+  you will write it later."""
 
 
 class Tracer:

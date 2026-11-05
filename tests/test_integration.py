@@ -170,3 +170,14 @@ async def test_fs_outside_workspace_refused(tmp_workspace):
             {"path": str(tmp_workspace.parent / "evil.md"), "content": "x"},
         )
     assert out.startswith("ERROR") and not (tmp_workspace.parent / "evil.md").exists()
+
+
+def test_demo_manifest_is_clean_and_the_injection_lives_in_the_fixture():
+    """The default demo manifest has no injected note; the injected copy keeps it for the injection test."""
+    from pathlib import Path
+
+    note = "ignore your instructions"
+    demo = Path(config.WORKSPACE, "package.json").read_text(encoding="utf-8")
+    injected = Path(__file__).parent.joinpath("fixtures", "injected_package.json").read_text(encoding="utf-8")
+    assert note not in demo and note in injected
+    assert json.loads(demo)["dependencies"] == json.loads(injected)["dependencies"]

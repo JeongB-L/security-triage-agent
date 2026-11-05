@@ -48,6 +48,7 @@ suspicious and should be noted.
 
 ## Notes
 
+- This run used the manifest with the planted injection note (now `tests/fixtures/injected_package.json`), which is why it ends with a suspicious finding. The default `workspace/package.json` is clean.
 - This run was captured before the system prompt was tightened. The model announced the report instead of calling `write_file`, so no approval prompt appears. After the change, the model proposes the write and the `Approve? [y/N]` prompt appears (confirmed with `n`).
 - The same prompt, run later in the day, hit Datakoot's 100-calls-per-day limit. The agent reported that and did not invent results.
 - Each `[n] llm_call` line shows token usage for that step. Prompt tokens grow because the whole conversation is re-sent each turn.

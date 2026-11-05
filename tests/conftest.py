@@ -146,3 +146,12 @@ def tmp_workspace(tmp_path):
     ws.mkdir()
     shutil.copy(Path(config.WORKSPACE) / "package.json", ws / "package.json")
     return ws
+
+
+@pytest.fixture
+def injected_workspace(tmp_path):
+    """Temp workspace whose package.json carries the planted prompt-injection note."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    shutil.copy(Path(__file__).parent / "fixtures" / "injected_package.json", ws / "package.json")
+    return ws
