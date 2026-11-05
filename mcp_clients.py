@@ -21,7 +21,9 @@ async def _limit(what: str, note: str = ""):
         async with asyncio.timeout(config.TIMEOUT_SECONDS):
             yield
     except TimeoutError:
-        raise TimeoutError(f"{what} timed out after {config.TIMEOUT_SECONDS:g}s{note}") from None
+        raise TimeoutError(
+            f"{what} timed out after {config.TIMEOUT_SECONDS:g}s{note}"
+        ) from None
 
 
 class MCPConnection:
@@ -40,14 +42,18 @@ class MCPConnection:
             async with _limit("connecting"):
                 if self.spec.transport == "stdio":
                     params = StdioServerParameters(
-                        command=self.spec.command, args=self.spec.args, env=self.spec.env
+                        command=self.spec.command,
+                        args=self.spec.args,
+                        env=self.spec.env,
                     )
                     read, write = await opened.enter_async_context(stdio_client(params))
                 else:
                     read, write = await opened.enter_async_context(
                         streamable_http_client(self.spec.url)
                     )
-                self.session = await opened.enter_async_context(ClientSession(read, write))
+                self.session = await opened.enter_async_context(
+                    ClientSession(read, write)
+                )
                 await self.session.initialize()
             # Success: hand the open resources to the caller's stack so they close at shutdown.
             stack.push_async_callback(opened.pop_all().aclose)
@@ -60,7 +66,11 @@ class MCPConnection:
     async def call_tool(self, name: str, args: dict):
         """Call one tool and return the raw CallToolResult."""
         # A timed-out write is ambiguous: the server may still finish it, so say so.
-        note = "; as a write it may still have completed" if name in self.spec.write_tools else ""
+        note = (
+            "; as a write it may still have completed"
+            if name in self.spec.write_tools
+            else ""
+        )
         async with _limit(f"tool '{name}'", note):
             return await self.session.call_tool(name, args)
 
@@ -154,4 +164,7 @@ class ToolRouter:
         try:
             await self.stack.aclose()
         except Exception as e:
-            print(f"Warning: problem while closing MCP connections: {describe(e)}", file=sys.stderr)
+            print(
+                f"Warning: problem while closing MCP connections: {describe(e)}",
+                file=sys.stderr,
+            )

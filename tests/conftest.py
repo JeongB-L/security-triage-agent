@@ -34,7 +34,15 @@ def fake_spec() -> ServerSpec:
         "stdio",
         command=sys.executable,
         args=[str(FAKE_SERVER)],
-        allowed_tools={"echo", "fail", "slow", "big", "structured", "inject", "write_note"},
+        allowed_tools={
+            "echo",
+            "fail",
+            "slow",
+            "big",
+            "structured",
+            "inject",
+            "write_note",
+        },
         write_tools={"write_note"},
     )
 
@@ -42,8 +50,14 @@ def fake_spec() -> ServerSpec:
 def fs_spec(ws) -> ServerSpec:
     """Real Filesystem server spec rooted at the given directory instead of the demo workspace."""
     spec = config.files_spec()
-    return ServerSpec(spec.name, spec.transport, spec.allowed_tools, spec.write_tools, spec.command,
-                      spec.args[:-1] + [str(ws)])
+    return ServerSpec(
+        spec.name,
+        spec.transport,
+        spec.allowed_tools,
+        spec.write_tools,
+        spec.command,
+        spec.args[:-1] + [str(ws)],
+    )
 
 
 def call(id: str, name: str, args: str = "{}") -> NS:
@@ -153,5 +167,8 @@ def injected_workspace(tmp_path):
     """Temp workspace whose package.json carries the planted prompt-injection note."""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    shutil.copy(Path(__file__).parent / "fixtures" / "injected_package.json", ws / "package.json")
+    shutil.copy(
+        Path(__file__).parent / "fixtures" / "injected_package.json",
+        ws / "package.json",
+    )
     return ws

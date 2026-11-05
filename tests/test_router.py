@@ -120,14 +120,22 @@ async def test_start_filters_to_allowlist():
 async def test_failing_server_named_in_error():
     """A server that fails to connect raises a ServerError naming it, with the cause."""
     r = make_router({"broken": FakeConnection(None, [], exc=OSError("refused"))})
-    with pytest.raises(ServerError, match="'broken' failed to start: OSError: refused") as info:
+    with pytest.raises(
+        ServerError, match="'broken' failed to start: OSError: refused"
+    ) as info:
         await r.start()
     assert info.value.server == "broken"
 
 
 async def test_exception_group_is_flattened_to_its_cause():
     """Transport failures arrive as exception groups; the message shows the real cause."""
-    r = make_router({"a": FakeConnection(None, [], exc=ExceptionGroup("tg", [OSError("connection refused")]))})
+    r = make_router(
+        {
+            "a": FakeConnection(
+                None, [], exc=ExceptionGroup("tg", [OSError("connection refused")])
+            )
+        }
+    )
     with pytest.raises(ServerError, match="OSError: connection refused"):
         await r.start()
 
@@ -136,7 +144,9 @@ async def test_missing_allowlisted_tool_fails_loudly_when_strict():
     """If a server stops offering an allowlisted tool, start() raises and names the tool."""
     r = make_router({"a": FakeConnection(None, ["keep"])})
     r.allowed = {"a": {"keep", "renamed"}}
-    with pytest.raises(ServerError, match="no longer offers allowlisted tool.*renamed.*--list-tools"):
+    with pytest.raises(
+        ServerError, match="no longer offers allowlisted tool.*renamed.*--list-tools"
+    ):
         await r.start()
 
 
@@ -156,7 +166,9 @@ async def test_list_all_tools_failure_is_a_server_error():
         raise RuntimeError("down")
 
     c.list_tools = boom
-    with pytest.raises(ServerError, match="'a' could not list tools: RuntimeError: down"):
+    with pytest.raises(
+        ServerError, match="'a' could not list tools: RuntimeError: down"
+    ):
         await r.list_all_tools()
 
 
@@ -170,4 +182,7 @@ async def test_close_never_masks_the_real_error(capsys):
     r = make_router({"a": FakeConnection(None, ["x"])})
     r.stack = BadStack()
     await r.close()
-    assert "problem while closing MCP connections: RuntimeError: cleanup broke" in capsys.readouterr().err
+    assert (
+        "problem while closing MCP connections: RuntimeError: cleanup broke"
+        in capsys.readouterr().err
+    )

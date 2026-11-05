@@ -26,7 +26,12 @@ def test_security_spec_is_datakoot_over_http():
     """Security server is the remote Datakoot endpoint with the four allowlisted tools."""
     spec = config.security_spec()
     assert spec.transport == "http" and spec.url == "https://security.datakoot.com/mcp"
-    assert spec.allowed_tools == {"cve_lookup", "epss_score", "package_vulnerabilities", "audit_dependencies"}
+    assert spec.allowed_tools == {
+        "cve_lookup",
+        "epss_score",
+        "package_vulnerabilities",
+        "audit_dependencies",
+    }
 
 
 def test_filesystem_spec_single_workspace_arg():
@@ -56,7 +61,11 @@ def test_timeout_and_token_budget_env(monkeypatch):
     monkeypatch.setenv("MAX_TOTAL_TOKENS", "123")
     try:
         reloaded = importlib.reload(config)
-        assert (reloaded.TIMEOUT_SECONDS, reloaded.MAX_TOTAL_TOKENS, reloaded.MAX_STEPS) == (7.5, 123, 50)
+        assert (
+            reloaded.TIMEOUT_SECONDS,
+            reloaded.MAX_TOTAL_TOKENS,
+            reloaded.MAX_STEPS,
+        ) == (7.5, 123, 50)
     finally:
         monkeypatch.undo()
         importlib.reload(config)
@@ -89,5 +98,7 @@ def test_trace_path_is_absolute_and_next_to_config():
     from pathlib import Path
 
     trace = Path(config.TRACE_PATH)
-    assert trace.is_absolute() and trace.parent == Path(config.__file__).resolve().parent
+    assert (
+        trace.is_absolute() and trace.parent == Path(config.__file__).resolve().parent
+    )
     assert trace.name == "trace.jsonl"

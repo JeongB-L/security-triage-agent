@@ -5,11 +5,21 @@ import sys
 import pytest
 
 import errors
-from errors import (AgentError, ConfigError, InputError, LimitError, LLMError, ServerError,
-                    ToolFailureError, describe)
+from errors import (
+    AgentError,
+    ConfigError,
+    InputError,
+    LimitError,
+    LLMError,
+    ServerError,
+    ToolFailureError,
+    describe,
+)
 
 
-@pytest.mark.parametrize("cls", [ConfigError, InputError, LLMError, LimitError, ToolFailureError])
+@pytest.mark.parametrize(
+    "cls", [ConfigError, InputError, LLMError, LimitError, ToolFailureError]
+)
 def test_every_agent_error_shares_one_base(cls):
     """All deliberate errors derive from AgentError, so one handler can report them."""
     assert issubclass(cls, AgentError) and not issubclass(cls, KeyboardInterrupt)
@@ -18,7 +28,10 @@ def test_every_agent_error_shares_one_base(cls):
 def test_server_error_names_the_server():
     """ServerError puts the server name in the message and on the exception."""
     e = ServerError("security", "failed to start: boom")
-    assert str(e) == "MCP server 'security' failed to start: boom" and e.server == "security"
+    assert (
+        str(e) == "MCP server 'security' failed to start: boom"
+        and e.server == "security"
+    )
 
 
 def test_input_error_is_also_a_value_error():
@@ -28,7 +41,9 @@ def test_input_error_is_also_a_value_error():
 
 def test_describe_flattens_exception_groups():
     """Nested exception groups become one readable line of their leaf errors."""
-    group = ExceptionGroup("outer", [OSError("refused"), ExceptionGroup("inner", [TimeoutError("slow")])])
+    group = ExceptionGroup(
+        "outer", [OSError("refused"), ExceptionGroup("inner", [TimeoutError("slow")])]
+    )
     assert describe(group) == "OSError: refused; TimeoutError: slow"
     assert describe(TimeoutError()) == "TimeoutError"
 

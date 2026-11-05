@@ -8,7 +8,14 @@ import pytest
 import agent
 import config
 from agent import SYSTEM_PROMPT, Tracer, run_agent
-from errors import ConfigError, InputError, LimitError, LLMError, ServerError, ToolFailureError
+from errors import (
+    ConfigError,
+    InputError,
+    LimitError,
+    LLMError,
+    ServerError,
+    ToolFailureError,
+)
 from guardrails import Policy
 from tests.conftest import ScriptedLLM, call, reply
 
@@ -129,17 +136,26 @@ async def test_step_cap(tmp_path):
 
 async def test_token_budget_stops_the_run(tmp_path):
     """Once prompt+completion tokens reach the budget, no further LLM call is made."""
-    llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(5)])  # 15 tokens per call
+    llm = ScriptedLLM(
+        [reply(calls=[call(f"c{i}", "s__read")]) for i in range(5)]
+    )  # 15 tokens per call
     with pytest.raises(LimitError, match="token budget of 20 reached after 30 tokens"):
         await run(llm, tmp=tmp_path, max_tokens=20)
     assert len(llm.requests) == 2
-    assert json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[-1])["reason"] == "token budget"
+    assert (
+        json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[-1])["reason"]
+        == "token budget"
+    )
 
 
 async def test_missing_usage_is_estimated_and_budget_still_applies(tmp_path):
     """A reply without usage does not crash, and the token budget still counts an estimate."""
     no_usage = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[call("c", "s__read")]))],
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=None, tool_calls=[call("c", "s__read")])
+            )
+        ],
         usage=None,
     )
     llm = ScriptedLLM([no_usage] * 3)
@@ -166,15 +182,21 @@ async def test_circuit_breaker_on_repeated_tool_errors(tmp_path):
     """Consecutive failing tool calls stop the run instead of looping to the step cap."""
     router = RecordingRouter("ERROR: Daily free limit reached")
     llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(10)])
-    with pytest.raises(ToolFailureError, match="3 tool calls failed in a row.*Daily free limit"):
+    with pytest.raises(
+        ToolFailureError, match="3 tool calls failed in a row.*Daily free limit"
+    ):
         await run(llm, router, tmp=tmp_path, max_tool_errors=3)
     assert len(router.calls) == 3 and len(llm.requests) == 3
 
 
 async def test_repeated_denied_writes_trip_the_circuit_breaker(tmp_path):
     """A model that keeps retrying a denied write is stopped instead of looping to the step cap."""
-    llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__write", "{}")]) for i in range(10)])
-    with pytest.raises(ToolFailureError, match="3 tool calls failed in a row.*Denied by human reviewer"):
+    llm = ScriptedLLM(
+        [reply(calls=[call(f"c{i}", "s__write", "{}")]) for i in range(10)]
+    )
+    with pytest.raises(
+        ToolFailureError, match="3 tool calls failed in a row.*Denied by human reviewer"
+    ):
         await run(llm, pol=policy(lambda p: "n"), tmp=tmp_path, max_tool_errors=3)
     assert len(llm.requests) == 3
 
@@ -188,7 +210,9 @@ async def test_success_resets_the_failure_count(tmp_path):
             self.calls.append((name, args))
             return "ERROR: boom" if len(self.calls) % 2 else "fine"
 
-    llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(4)] + [reply("done")])
+    llm = ScriptedLLM(
+        [reply(calls=[call(f"c{i}", "s__read")]) for i in range(4)] + [reply("done")]
+    )
     answer, _, _ = await run(llm, Flaky(), tmp=tmp_path, max_tool_errors=2)
     assert answer == "done"
 
@@ -198,7 +222,10 @@ async def test_tracer_failure_does_not_break_the_run(tmp_path, capsys):
     bad_path = str(tmp_path / "no_such_dir" / "trace.jsonl")
     llm = ScriptedLLM([reply(calls=[call("c1", "s__read")]), reply("done")])
     answer = await run_agent("q", RecordingRouter(), policy(), Tracer(bad_path), llm)
-    assert answer == "done" and capsys.readouterr().err.count("cannot write trace file") == 1
+    assert (
+        answer == "done"
+        and capsys.readouterr().err.count("cannot write trace file") == 1
+    )
 
 
 async def test_injection_only_inside_wrapper(tmp_path):

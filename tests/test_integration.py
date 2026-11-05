@@ -48,7 +48,9 @@ async def test_router_paths():
 async def test_tool_call_times_out(monkeypatch):
     """A tool slower than TIMEOUT_SECONDS returns an error string instead of hanging."""
     async with started([fake_spec()]) as router:
-        monkeypatch.setattr(config, "TIMEOUT_SECONDS", 1.0)  # only after startup, which can take a moment
+        monkeypatch.setattr(
+            config, "TIMEOUT_SECONDS", 1.0
+        )  # only after startup, which can take a moment
         out = await router.call("fake__slow", {})
     assert out.startswith("ERROR") and "timed out after 1s" in out
 
@@ -56,8 +58,17 @@ async def test_tool_call_times_out(monkeypatch):
 async def test_connect_times_out_naming_server(monkeypatch):
     """A server that never completes the handshake fails start() with a clear, named error."""
     monkeypatch.setattr(config, "TIMEOUT_SECONDS", 1.0)
-    hang = ServerSpec("hang", "stdio", {"x"}, command=sys.executable, args=["-c", "import time; time.sleep(30)"])
-    with pytest.raises(ServerError, match="'hang' failed to start: TimeoutError: connecting timed out after 1s"):
+    hang = ServerSpec(
+        "hang",
+        "stdio",
+        {"x"},
+        command=sys.executable,
+        args=["-c", "import time; time.sleep(30)"],
+    )
+    with pytest.raises(
+        ServerError,
+        match="'hang' failed to start: TimeoutError: connecting timed out after 1s",
+    ):
         async with started([hang]):
             pass
 
@@ -178,6 +189,10 @@ def test_demo_manifest_is_clean_and_the_injection_lives_in_the_fixture():
 
     note = "ignore your instructions"
     demo = Path(config.WORKSPACE, "package.json").read_text(encoding="utf-8")
-    injected = Path(__file__).parent.joinpath("fixtures", "injected_package.json").read_text(encoding="utf-8")
+    injected = (
+        Path(__file__)
+        .parent.joinpath("fixtures", "injected_package.json")
+        .read_text(encoding="utf-8")
+    )
     assert note not in demo and note in injected
     assert json.loads(demo)["dependencies"] == json.loads(injected)["dependencies"]

@@ -1,4 +1,5 @@
 """Test-only MCP server (stdio) exposing tools that exercise every router/guardrail path."""
+
 import asyncio
 
 from mcp.server.mcpserver import MCPServer

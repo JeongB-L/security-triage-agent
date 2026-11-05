@@ -10,7 +10,14 @@ import errors
 errors.install_excepthook()  # global handler first: it must also cover ConfigError raised while importing config
 
 import config  # noqa: E402
-from errors import ConfigError, InputError, LimitError, LLMError, ToolFailureError, describe  # noqa: E402
+from errors import (
+    ConfigError,
+    InputError,
+    LimitError,
+    LLMError,
+    ToolFailureError,
+    describe,
+)  # noqa: E402
 from guardrails import Policy, check_input, wrap_output  # noqa: E402
 from mcp_clients import ToolRouter  # noqa: E402
 
@@ -59,15 +66,23 @@ class Tracer:
     def log(self, event: str, step: int, **data) -> None:
         """Write one trace record and echo it to the console; logging problems only warn."""
         ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        record = json.dumps({"ts": ts, "event": event, "step": step, **data}, default=str)
+        record = json.dumps(
+            {"ts": ts, "event": event, "step": step, **data}, default=str
+        )
         try:
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(record + "\n")
         except OSError as e:
             if not self._warned:
                 self._warned = True
-                print(f"Warning: cannot write trace file {self.path}: {e}", file=sys.stderr)
-        print(f"[{step}] {event} " + " ".join(f"{k}={str(v)[:80]}" for k, v in data.items()))
+                print(
+                    f"Warning: cannot write trace file {self.path}: {e}",
+                    file=sys.stderr,
+                )
+        print(
+            f"[{step}] {event} "
+            + " ".join(f"{k}={str(v)[:80]}" for k, v in data.items())
+        )
 
 
 async def _ask_llm(llm, model: str, messages: list, tools: list) -> tuple:
@@ -79,7 +94,9 @@ async def _ask_llm(llm, model: str, messages: list, tools: list) -> tuple:
             tools=tools,
             temperature=0,
         )
-    except Exception as e:  # the SDK has already retried transient errors (config.LLM_MAX_RETRIES)
+    except (
+        Exception
+    ) as e:  # the SDK has already retried transient errors (config.LLM_MAX_RETRIES)
         raise LLMError(f"LLM call failed: {describe(e)}") from e
     # Providers behind OpenRouter can answer 200 with an error payload or no choices.
     choices = getattr(resp, "choices", None)
@@ -93,7 +110,9 @@ async def _ask_llm(llm, model: str, messages: list, tools: list) -> tuple:
     return msg, len(json.dumps(messages, default=str)) // 4, len(msg.content or "") // 4
 
 
-async def _run_tool(call, router: ToolRouter, policy: Policy) -> tuple[dict, bool, str, bool]:
+async def _run_tool(
+    call, router: ToolRouter, policy: Policy
+) -> tuple[dict, bool, str, bool]:
     """Parse, authorize and run one tool call; returns (args, allowed, result_text, failed). Never raises for tool problems."""
     try:
         args = json.loads(call.function.arguments or "{}")
@@ -102,7 +121,9 @@ async def _run_tool(call, router: ToolRouter, policy: Policy) -> tuple[dict, boo
     except ValueError as e:
         return {}, False, f"ERROR: bad tool arguments: {e}", True
     allowed, reason = policy.authorize(call.function.name, args)
-    if not allowed:  # a model that keeps retrying a denied tool is looping, so this counts as a failure
+    if (
+        not allowed
+    ):  # a model that keeps retrying a denied tool is looping, so this counts as a failure
         return args, False, reason, True
     result = await router.call(call.function.name, args)
     return args, True, result, result.startswith("ERROR")
@@ -133,17 +154,29 @@ async def run_agent(
     for step in range(1, max_steps + 1):
         if used >= max_tokens:
             tracer.log("stopped", step, reason="token budget", tokens=used)
-            raise LimitError(f"token budget of {max_tokens} reached after {used} tokens without a final answer")
-        msg, prompt_tokens, completion_tokens = await _ask_llm(llm, model, messages, router.openai_tools)
+            raise LimitError(
+                f"token budget of {max_tokens} reached after {used} tokens without a final answer"
+            )
+        msg, prompt_tokens, completion_tokens = await _ask_llm(
+            llm, model, messages, router.openai_tools
+        )
         used += prompt_tokens + completion_tokens
-        tracer.log("llm_call", step, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+        tracer.log(
+            "llm_call",
+            step,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
         entry = {"role": "assistant", "content": msg.content}
         if msg.tool_calls:
             entry["tool_calls"] = [
                 {
                     "id": c.id,
                     "type": "function",
-                    "function": {"name": c.function.name, "arguments": c.function.arguments},
+                    "function": {
+                        "name": c.function.name,
+                        "arguments": c.function.arguments,
+                    },
                 }
                 for c in msg.tool_calls
             ]
@@ -155,13 +188,24 @@ async def run_agent(
         for call in msg.tool_calls:
             args, allowed, result, failed = await _run_tool(call, router, policy)
             wrapped = wrap_output(call.function.name, result)
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": wrapped})
-            tracer.log("tool_call", step, name=call.function.name, args=args, allowed=allowed, result_len=len(wrapped))
+            messages.append(
+                {"role": "tool", "tool_call_id": call.id, "content": wrapped}
+            )
+            tracer.log(
+                "tool_call",
+                step,
+                name=call.function.name,
+                args=args,
+                allowed=allowed,
+                result_len=len(wrapped),
+            )
             # Circuit breaker: repeated failures mean retrying will not help (rate limit, server down).
             failures = failures + 1 if failed else 0
             if failures >= max_tool_errors:
                 tracer.log("stopped", step, reason="tool errors", failures=failures)
-                raise ToolFailureError(f"{failures} tool calls failed in a row; last result: {result[:200]}")
+                raise ToolFailureError(
+                    f"{failures} tool calls failed in a row; last result: {result[:200]}"
+                )
 
     tracer.log("stopped", max_steps, reason="step cap")
     raise LimitError(f"stopped after {max_steps} steps without a final answer")
@@ -177,10 +221,14 @@ async def main() -> None:
         raise InputError('Usage: python agent.py "<prompt>" | --list-tools')
     list_only = args[0] == "--list-tools"
     if not list_only and not config.OPENROUTER_API_KEY:
-        raise ConfigError("OPENROUTER_API_KEY is missing: copy .env.example to .env and set it")
+        raise ConfigError(
+            "OPENROUTER_API_KEY is missing: copy .env.example to .env and set it"
+        )
     router = ToolRouter()
     try:
-        await router.start(strict=not list_only)  # --list-tools must work even after a tool rename
+        await router.start(
+            strict=not list_only
+        )  # --list-tools must work even after a tool rename
         if list_only:
             for server, names in (await router.list_all_tools()).items():
                 print(f"{server}: {', '.join(names)}")
