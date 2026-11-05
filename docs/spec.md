@@ -1,4 +1,4 @@
-# Security Triage Agent: Implementation Spec
+# Security Triage Agent: Technical Spec
 
 Nov 5, 2026 · @Jeongbin Lee · updated to match the implementation as built
 
@@ -70,7 +70,7 @@ Both servers are real, free, and need no API key. One is remote (HTTP), one is l
 
 **Filesystem server scope.** Only the absolute path of `./workspace` is passed. The server refuses paths outside it, which is the least-privilege boundary. Relative paths resolve inside the workspace.
 
-**Datakoot rate limit.** The free tier allows 100 tool calls per day (resets 00:00 UTC). A full demo run uses roughly 10 to 40 calls. After the limit, calls return an error text that the agent reports instead of inventing results.
+**Datakoot rate limit.** The free tier allows about 100 tool calls per day. The server says it resets at 00:00 UTC, but the observed reset timing has varied, so treat it as approximate. A full demo run uses roughly 10 to 40 calls. After the limit, calls return an error text that the agent reports instead of inventing results.
 
 **Third-party data exposure.** Dependency names and versions are sent to a third-party host. Acceptable for public package names, and stated in the README. A production agent would self-host the lookup server.
 
@@ -78,14 +78,13 @@ Both servers are real, free, and need no API key. One is remote (HTTP), one is l
 
 One public repo holds everything: code, tests, the demo workspace, and CI.
 
-1. Create it with `gh repo create security-triage-agent --public`.
+1. Create it with `gh repo create security-triage-agent --public` (done: https://github.com/JeongB-L/security-triage-agent).
 2. `.gitignore` and `.env.example` are committed before any secret could be, and `.env` is never committed.
 3. Never commit `.env` or `.coverage`. `trace.jsonl` and `workspace/remediation_report.md` are committed on purpose, as evidence of a real run.
 
 ```text
 security-triage-agent/
   README.md
-  Security Triage Agent Implementation Spec.md
   requirements.txt          # mcp, openai, python-dotenv (pinned)
   requirements-dev.txt      # pytest, pytest-asyncio, pytest-cov
   pyproject.toml            # pytest config: asyncio_mode = auto, addopts = -v -rs, marker: live
@@ -97,12 +96,16 @@ security-triage-agent/
   guardrails.py             # policy layer
   agent.py                  # host: loop, context, LLM call, trace, CLI
   examples/sample_run.md    # trimmed real trace and final answer
+  trace.jsonl               # trace of a real run, committed as evidence
   docs/architecture.png     # architecture diagram shown in the README
+  docs/spec.md              # this document
   workspace/
-    package.json            # demo manifest (seeded, see below)
+    package.json            # clean demo manifest (seeded, see below)
+    remediation_report.md   # report from a real run, committed as evidence
   tests/
     conftest.py             # shared fixtures and test doubles
     fixtures/fake_server.py # test-only MCP server
+    fixtures/injected_package.json  # demo manifest plus the planted injection note
     test_config.py
     test_errors.py
     test_guardrails.py
@@ -140,7 +143,7 @@ Implementation stays compact (about 590 lines across the five files, including d
 
 - No agent frameworks (no LangChain, LangGraph, or OpenAI Agents SDK). The loop is hand-written on purpose.
 - `asyncio` only because the MCP SDK requires it.
-- No inheritance hierarchies or plugin systems. Type hints on public functions.
+- No inheritance hierarchies or plugin systems, apart from the exception hierarchy in `errors.py`. Type hints on public functions.
 
 ## Module specs
 
@@ -297,12 +300,12 @@ Tests are the robustness story: every branch of the implementation is exercised 
 
 **test_agent_loop.py:** immediate final answer; one tool call then final; three calls in one turn keep order and ids; malformed or non-object arguments give an error message and the loop continues; a disallowed tool never reaches the router; denied write does not call the router and the denial reaches the model; approved write calls the router once with the exact args; step cap and token budget raise `LimitError`; a reply without usage is estimated and the budget still applies; unusable LLM responses (no choices, error payload, no message) raise `LLMError`; repeated tool errors or repeated denied writes trip the circuit breaker, and a success resets it; an unwritable trace file only warns; injection content stays inside one wrapper; system prompt and tool schemas are sent on every call; tracer lines carry step numbers and token counts, and every record starts with a parseable UTC `ts`; an LLM exception raises `LLMError` with no extra attempt by the loop; invalid input is rejected before any LLM call; `main()` raises `InputError` for no prompt, `ServerError` for a startup failure, `ConfigError` for a missing key (before any server starts), and starts non-strict for `--list-tools`.
 
-**test_integration.py:** real `MCPConnection` against `fake_server.py` (initialize, list, call, error and structured paths); a slow tool returns a timeout error string; a server that never completes the handshake fails `start()` with a named `ServerError`; an unreachable HTTP server gives a `ServerError` with the real cause (`ConnectError`), not a bare cancellation; a timed-out write says it may still have completed; full `run_agent` with `ScriptedLLM` and a real `ToolRouter`, including approval of `write_note`; Filesystem server (skipped without `npx`): reads the demo manifest, a denied write creates nothing, an approved write lands in the workspace, a path outside the workspace is refused.
+**test_integration.py:** real `MCPConnection` against `fake_server.py` (initialize, list, call, error and structured paths); a slow tool returns a timeout error string; a server that never completes the handshake fails `start()` with a named `ServerError`; an unreachable HTTP server gives a `ServerError` with the real cause (`ConnectError`), not a bare cancellation; a timed-out write says it may still have completed; full `run_agent` with `ScriptedLLM` and a real `ToolRouter`, including approval of `write_note`; the demo manifest has no injected note while the fixture keeps it (and both list the same dependencies); Filesystem server (skipped without `npx`): reads the demo manifest, a denied write creates nothing, an approved write lands in the workspace, a path outside the workspace is refused.
 
 **test_live.py** (10 tests, run by default; `live` marker):
 
 - *Security Intel (5, direct calls, no model):* `cve_lookup` on `CVE-2021-44228` is CRITICAL and in KEV; `epss_score` is above 0.9; `package_vulnerabilities` for `lodash 4.17.15` finds advisories; `audit_dependencies` on the demo manifest flags lodash, minimist, axios and jsonwebtoken and leaves `left-pad` clean; an unknown CVE returns a clean error. These skip with a clear reason when Datakoot's daily limit is reached.
-- *Computer control (5, real model plus real Filesystem server in a temp workspace; need `OPENROUTER_API_KEY`):* list and read the manifest; an approved write creates the file; a denied write creates nothing; a write outside the workspace is refused; the injected instruction is quoted, not obeyed.
+- *Real model + Filesystem (5 `test_e2e_*` tests: real model, real Filesystem server, temp workspace; need `OPENROUTER_API_KEY`):* list and read the manifest; an approved write creates the file; a denied write creates nothing; a write outside the workspace is refused; the injected instruction is quoted, not obeyed.
 
 ### CI
 
@@ -343,7 +346,7 @@ Other limits: `MAX_STEPS` (50) bounds the loop, `TIMEOUT_SECONDS` (60) bounds ea
 
 1. What the agent does, how it is built (ReAct, MCP, OpenRouter), how a prompt flows, and the Datakoot rate-limit notice
 2. Architecture diagram and a component table (architecture role, what it does, file)
-3. The agent loop in detail, memory, and security design
+3. The agent loop in detail, error handling, memory, and security design
 4. Setup and run, with the `.env` settings table
 5. Testing, token optimization, and next steps
 

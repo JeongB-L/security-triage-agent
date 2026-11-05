@@ -12,7 +12,7 @@ It is built in Python around the **ReAct** pattern (reason, act, observe, repeat
 
 **How a prompt flows:** you enter a prompt, then the agent loop sends it to the LLM along with the list of available tools. The LLM either answers or asks for tools. Each requested tool call is checked by the guardrails, sent to the right MCP server, and the result goes back to the LLM. This repeats until the LLM gives a final answer.
 
-> **Important: Datakoot rate limit.** The Security Intel server (Datakoot) is free and needs no key, but allows **100 tool calls per day** (resets 00:00 UTC). A full demo run can use 10 to 40 calls. After the limit, CVE lookups return an error until the reset. Package names and versions you audit are sent to Datakoot, so use it only for public packages.
+> **Important: Datakoot rate limit.** The Security Intel server (Datakoot) is free and needs no key, but allows about **100 tool calls per day** (the server says it resets at 00:00 UTC, but the reset timing has varied). A full demo run can use 10 to 40 calls. After the limit, CVE lookups return an error until the reset. Package names and versions you audit are sent to Datakoot, so use it only for public packages.
 
 ## Architecture
 
@@ -120,6 +120,8 @@ Always on: only 7 tools are exposed to the LLM, the system prompt asks for few t
 Switchable with `TOKEN_OPTIMIZATION`: each tool result is cut to 3000 characters.
 
 Not built yet: keeping only key fields from results, summarizing old conversation, and caching repeated tool calls.
+
+The design, module contracts and the full test-case list are in [`docs/spec.md`](docs/spec.md).
 
 ## Next steps
 
