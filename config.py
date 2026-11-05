@@ -36,7 +36,7 @@ LLM_MAX_RETRIES = 2  # the OpenAI SDK retries transient errors (429, 5xx, timeou
 MAX_CONSECUTIVE_TOOL_ERRORS = 5
 MAX_TOOL_OUTPUT_CHARS = 3000  # cve_lookup puts the EPSS field at ~char 2100, so 2000 would cut it
 MAX_INPUT_CHARS = 2000
-TRACE_PATH = "trace.jsonl"
+TRACE_PATH = str(Path(__file__).parent.resolve() / "trace.jsonl")
 WORKSPACE = str(Path(__file__).parent.resolve() / "workspace")
 
 TOKEN_OPTIMIZATION = os.getenv("TOKEN_OPTIMIZATION", "on").strip().lower() not in (

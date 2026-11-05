@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+from datetime import datetime, timezone
 
 import errors
 
@@ -56,7 +57,8 @@ class Tracer:
 
     def log(self, event: str, step: int, **data) -> None:
         """Write one trace record and echo it to the console; logging problems only warn."""
-        record = json.dumps({"event": event, "step": step, **data}, default=str)
+        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = json.dumps({"ts": ts, "event": event, "step": step, **data}, default=str)
         try:
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(record + "\n")

@@ -82,3 +82,12 @@ def test_invalid_numeric_settings_raise_config_error(monkeypatch, name, value, m
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+def test_trace_path_is_absolute_and_next_to_config():
+    """TRACE_PATH does not depend on the current directory, just like WORKSPACE."""
+    from pathlib import Path
+
+    trace = Path(config.TRACE_PATH)
+    assert trace.is_absolute() and trace.parent == Path(config.__file__).resolve().parent
+    assert trace.name == "trace.jsonl"

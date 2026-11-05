@@ -1,37 +1,39 @@
 # Dependency Vulnerability Remediation Report
 
-## Overview
-This report summarizes the known vulnerabilities found in the current dependencies of the project and provides prioritized recommendations for remediation.
+This report summarizes the vulnerabilities found in the current dependencies and the recommended fixes.
 
-## Vulnerable Packages and Recommendations
+## 1. axios (version 0.21.0)
+- **Worst CVE:** CVE-2025-62718
+- **Severity:** Critical (CVSS 9.9)
+- **Description:** Hostname normalization bypass in NO_PROXY leading to SSRF and proxy bypass.
+- **CISA KEV:** Not listed
+- **EPSS:** 0.01186 (67.9 percentile)
+- **Fix version:** Upgrade to 1.15.0 or 0.31.0
 
-### 1. axios (version 0.21.0)
-- Total vulnerabilities: 25
-- Notable issues: Prototype Pollution (CVE-2026-44495), SSRF (CVE-2025-62718), Denial of Service (CVE-2026-25639), Server-Side Request Forgery (CVE-2020-28168)
-- Severity: Multiple high and critical severity vulnerabilities
-- Recommendation: Upgrade to the latest axios version available to mitigate these vulnerabilities.
+## 2. lodash (version 4.17.15)
+- **Worst CVE:** CVE-2026-4800
+- **Severity:** High (CVSS 8.1)
+- **Description:** Code injection via _.template imports key names.
+- **CISA KEV:** Not listed
+- **EPSS:** 0.02808 (86.5 percentile)
+- **Fix version:** Upgrade to 4.18.1
 
-### 2. lodash (version 4.17.15)
-- Total vulnerabilities: 5
-- Notable issues: Code Injection (CVE-2026-4800), Prototype Pollution (CVE-2025-13465, CVE-2020-8203), Command Injection (CVE-2021-23337), ReDoS (CVE-2020-28500)
-- Severity: Critical and high severity vulnerabilities
-- Recommendation: Upgrade lodash to the latest stable version (>=4.17.21 or later).
+## 3. jsonwebtoken (version 8.5.1)
+- **Worst CVE:** CVE-2022-23539
+- **Severity:** Medium (CVSS 5.9)
+- **Description:** Misconfiguration allowing legacy insecure key types for signature verification.
+- **CISA KEV:** Not listed
+- **EPSS:** 0.00524 (44.6 percentile)
+- **Fix version:** Upgrade to 9.0.0
 
-### 3. jsonwebtoken (version 8.5.1)
-- Total vulnerabilities: 3
-- Notable issues: Unrestricted key type usage (CVE-2022-23539), Forgeable tokens (CVE-2022-23541), Signature validation bypass (CVE-2022-23540)
-- Severity: High severity vulnerabilities
-- Recommendation: Upgrade jsonwebtoken to the latest version.
-
-### 4. minimist (version 1.2.0)
-- Total vulnerabilities: 2
-- Notable issues: Prototype Pollution (CVE-2020-7598, CVE-2021-44906)
-- Severity: Medium to high severity vulnerabilities
-- Recommendation: Upgrade minimist to the latest version.
-
-## Summary
-Immediate action should be taken to upgrade axios and lodash due to the number and severity of vulnerabilities. jsonwebtoken and minimist should also be upgraded to ensure overall security.
+## 4. minimist (version 1.2.0)
+- **Worst CVE:** CVE-2021-44906
+- **Severity:** High (CVSS 7.8)
+- **Description:** Prototype pollution vulnerability.
+- **CISA KEV:** Not listed
+- **EPSS:** Not checked
+- **Fix version:** Upgrade to 1.2.6
 
 ---
 
-This report is based on the latest vulnerability data as of November 2026.
+Please prioritize upgrading the packages in the order listed above to mitigate the most critical vulnerabilities first.

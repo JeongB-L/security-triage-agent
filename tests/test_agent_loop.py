@@ -314,3 +314,15 @@ async def test_main_requires_api_key_before_connecting(monkeypatch):
     with pytest.raises(ConfigError, match="OPENROUTER_API_KEY is missing"):
         await run_main(monkeypatch, ["hi"], key="")
     assert StubRouter.strict == "untouched"
+
+
+def test_trace_records_start_with_an_iso_utc_timestamp(tmp_path):
+    """Every trace record is valid JSON whose first field is a UTC ISO 8601 timestamp."""
+    from datetime import datetime, timedelta
+
+    path = tmp_path / "t.jsonl"
+    Tracer(str(path)).log("llm_call", 1, prompt_tokens=3)
+    record = json.loads(path.read_text())
+    assert list(record)[0] == "ts"
+    stamp = datetime.fromisoformat(record["ts"])
+    assert stamp.utcoffset() == timedelta(0)

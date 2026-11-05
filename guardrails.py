@@ -43,6 +43,9 @@ class Policy:
         return True, ""
 
 
+_WRAPPER_TAG = re.compile(r"</?tool_output[^>]*>", re.IGNORECASE)
+
+
 def shape_output(name: str, text: str) -> str:
     """Pass-through hook reserved for field shaping (token optimization)."""
     return text
@@ -51,9 +54,13 @@ def shape_output(name: str, text: str) -> str:
 def wrap_output(name: str, text: str) -> str:
     """Sanitize, optionally truncate, and wrap tool output as untrusted data."""
     text = shape_output(name, text)
-    # Strip wrapper tags so tool data cannot close or forge the wrapper.
-    text = re.sub(r"</?tool_output[^>]*>", "", text, flags=re.IGNORECASE)
+    # Strip wrapper tags until none remain: one pass can leave a new tag behind
+    # ("</tool_<tool_output>output>" becomes "</tool_output>").
+    while (cleaned := _WRAPPER_TAG.sub("", text)) != text:
+        text = cleaned
     limit = config.MAX_TOOL_OUTPUT_CHARS
     if config.TOKEN_OPTIMIZATION and len(text) > limit:
         text = f"{text[:limit]}[truncated {len(text) - limit} chars]"
-    return f'<tool_output tool="{name}">{text}</tool_output>'
+    # The name comes from the model; fullmatch (unlike "$") also rejects a trailing newline.
+    label = name if re.fullmatch(r"[A-Za-z0-9_]+", name) else "unknown"
+    return f'<tool_output tool="{label}">{text}</tool_output>'
