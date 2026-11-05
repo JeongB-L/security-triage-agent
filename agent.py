@@ -61,7 +61,7 @@ class Tracer:
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(record + "\n")
         except OSError as e:
-            if not self._warned:  # warn once, not on every event
+            if not self._warned:
                 self._warned = True
                 print(f"Warning: cannot write trace file {self.path}: {e}", file=sys.stderr)
         print(f"[{step}] {event} " + " ".join(f"{k}={str(v)[:80]}" for k, v in data.items()))
@@ -74,7 +74,7 @@ async def _ask_llm(llm, model: str, messages: list, tools: list) -> tuple:
             model=model,
             messages=messages,
             tools=tools,
-            temperature=0,  # keep behaviour as repeatable as possible
+            temperature=0,
         )
     except Exception as e:  # the SDK has already retried transient errors (config.LLM_MAX_RETRIES)
         raise LLMError(f"LLM call failed: {describe(e)}") from e
@@ -121,15 +121,13 @@ async def run_agent(
     Raises InputError (bad prompt), LLMError (LLM failure), LimitError (step cap or token budget)
     or ToolFailureError (too many tool errors in a row). `llm` is an AsyncOpenAI-shaped client.
     """
-    # Context is just the conversation history: system prompt plus the user prompt.
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": check_input(question)},
     ]
-    used = 0  # prompt + completion tokens spent so far in this run
-    failures = 0  # consecutive failed tool calls
+    used = 0
+    failures = 0
     for step in range(1, max_steps + 1):
-        # Stop before another LLM call once the run has spent its token budget.
         if used >= max_tokens:
             tracer.log("stopped", step, reason="token budget", tokens=used)
             raise LimitError(f"token budget of {max_tokens} reached after {used} tokens without a final answer")
@@ -151,7 +149,6 @@ async def run_agent(
             tracer.log("final", step, chars=len(msg.content or ""))
             return msg.content or "(the model returned an empty response)"
 
-        # Run each requested tool through policy, then the router; failures become tool messages.
         for call in msg.tool_calls:
             args, allowed, result, failed = await _run_tool(call, router, policy)
             wrapped = wrap_output(call.function.name, result)
@@ -176,7 +173,6 @@ async def main() -> None:
     if not args:
         raise InputError('Usage: python agent.py "<prompt>" | --list-tools')
     list_only = args[0] == "--list-tools"
-    # Fail fast, before connecting to anything, if the key is missing.
     if not list_only and not config.OPENROUTER_API_KEY:
         raise ConfigError("OPENROUTER_API_KEY is missing: copy .env.example to .env and set it")
     router = ToolRouter()

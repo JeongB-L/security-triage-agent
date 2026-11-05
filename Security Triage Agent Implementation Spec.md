@@ -124,7 +124,7 @@ Implementation stays compact (about 590 lines across the five files, including d
 **Comments (implementation and tests)**
 
 - Every file starts with a short docstring naming its architecture component (for example, "MCP client layer").
-- Before each logical chunk of code, a one or two line comment says what the next chunk does and why. Comment intent, not syntax.
+- Inline comments only where the reason is not obvious from the code (a safety choice, a workaround, an ordering constraint). Do not comment what the code already says.
 - Every function has a one-line docstring. Every test has a docstring stating the behavior it proves.
 
 **Abstraction**
@@ -333,7 +333,7 @@ Other limits: `MAX_STEPS` (50) bounds the loop, `TIMEOUT_SECONDS` (60) bounds ea
 - [x] `pytest -m "not live"` passes offline with at least 90% coverage
 - [ ] CI is green on both Python versions (needs the repo pushed)
 - [ ] No secrets in git history; repo is public
-- [x] Every file has a component docstring and a comment before each logical chunk
+- [x] Every file has a component docstring, every function a one-line docstring, and inline comments are limited to non-obvious reasons
 
 **README contents**
 

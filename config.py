@@ -25,21 +25,20 @@ def _env_number(name: str, default, cast, minimum):
     return value
 
 
-# LLM via OpenRouter (OpenAI-compatible). The key comes from .env only, never hardcoded.
+# LLM via OpenRouter (OpenAI-compatible); the key comes from .env only.
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 MODEL = os.getenv("MODEL", "openai/gpt-4.1-mini")
 MAX_STEPS = 50
-MAX_TOTAL_TOKENS = _env_number("MAX_TOTAL_TOKENS", 1_000_000, int, 1)  # prompt + completion tokens per run
+MAX_TOTAL_TOKENS = _env_number("MAX_TOTAL_TOKENS", 1_000_000, int, 1)
 TIMEOUT_SECONDS = _env_number("TIMEOUT_SECONDS", 60.0, float, 0.1)  # MCP connect, MCP tool call, LLM call
 LLM_MAX_RETRIES = 2  # the OpenAI SDK retries transient errors (429, 5xx, timeouts) this many times
-MAX_CONSECUTIVE_TOOL_ERRORS = 5  # stop the run instead of looping on failing tools
-MAX_TOOL_OUTPUT_CHARS = 3000  # spec said 2000, but cve_lookup puts EPSS at ~char 2100
+MAX_CONSECUTIVE_TOOL_ERRORS = 5
+MAX_TOOL_OUTPUT_CHARS = 3000  # cve_lookup puts the EPSS field at ~char 2100, so 2000 would cut it
 MAX_INPUT_CHARS = 2000
 TRACE_PATH = "trace.jsonl"
 WORKSPACE = str(Path(__file__).parent.resolve() / "workspace")
 
-# Token optimization (truncating tool results) is a separate switch in .env.
 TOKEN_OPTIMIZATION = os.getenv("TOKEN_OPTIMIZATION", "on").strip().lower() not in (
     "off",
     "0",

@@ -281,9 +281,10 @@ class StubRouter:
         """Nothing to close."""
 
 
-async def run_main(monkeypatch, argv, fail=False):
-    """Run agent.main() with a stub router and the given argv."""
+async def run_main(monkeypatch, argv, fail=False, key="test-key"):
+    """Run agent.main() with a stub router, the given argv and an explicit key (never the developer's .env)."""
     StubRouter.fail = fail
+    monkeypatch.setattr(config, "OPENROUTER_API_KEY", key)
     monkeypatch.setattr(agent, "ToolRouter", StubRouter)
     monkeypatch.setattr("sys.argv", ["agent.py", *argv])
     await agent.main()
@@ -309,8 +310,7 @@ async def test_main_list_tools_is_not_strict(monkeypatch, capsys):
 
 async def test_main_requires_api_key_before_connecting(monkeypatch):
     """A missing OPENROUTER_API_KEY raises ConfigError before any server is started."""
-    monkeypatch.setattr(config, "OPENROUTER_API_KEY", "")
     StubRouter.strict = "untouched"
     with pytest.raises(ConfigError, match="OPENROUTER_API_KEY is missing"):
-        await run_main(monkeypatch, ["hi"])
+        await run_main(monkeypatch, ["hi"], key="")
     assert StubRouter.strict == "untouched"

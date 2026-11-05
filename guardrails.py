@@ -29,10 +29,8 @@ class Policy:
 
     def authorize(self, name: str, args: dict) -> tuple[bool, str]:
         """Return (ok, reason); reason is the denial text when not ok."""
-        # Allowlist first: anything unknown is denied without bothering the human.
         if name not in self.allowed:
             return False, "Tool not allowed by policy"
-        # Writes pause for explicit approval; only y/Y counts as yes.
         if name in self.writes:
             print(f"\nProposed write tool: {name}\n{json.dumps(args, indent=2)}")
             # Fail closed: if the prompt itself breaks (no stdin, broken terminal), the write is denied.
@@ -53,9 +51,8 @@ def shape_output(name: str, text: str) -> str:
 def wrap_output(name: str, text: str) -> str:
     """Sanitize, optionally truncate, and wrap tool output as untrusted data."""
     text = shape_output(name, text)
-    # Remove any tool_output tags so data can't close or forge the wrapper.
+    # Strip wrapper tags so tool data cannot close or forge the wrapper.
     text = re.sub(r"</?tool_output[^>]*>", "", text, flags=re.IGNORECASE)
-    # Truncation is the token-optimization switch (TOKEN_OPTIMIZATION in .env).
     limit = config.MAX_TOOL_OUTPUT_CHARS
     if config.TOKEN_OPTIMIZATION and len(text) > limit:
         text = f"{text[:limit]}[truncated {len(text) - limit} chars]"
