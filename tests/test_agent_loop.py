@@ -1,12 +1,14 @@
 """Unit tests for the agent loop using a scripted LLM and a recording router."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
 import agent
 import config
 from agent import SYSTEM_PROMPT, Tracer, run_agent
+from errors import ConfigError, InputError, LimitError, LLMError, ServerError, ToolFailureError
 from guardrails import Policy
 from tests.conftest import ScriptedLLM, call, reply
 
@@ -116,22 +118,87 @@ async def test_write_approved(tmp_path):
 
 
 async def test_step_cap(tmp_path):
-    """Exactly max_steps LLM calls, then the stop message."""
+    """Exactly max_steps LLM calls, then a LimitError (not a normal-looking answer)."""
     llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(3)])
-    answer, _, path = await run(llm, tmp=tmp_path, max_steps=3)
-    assert (
-        len(llm.requests) == 3
-        and answer == "Stopped after 3 steps without a final answer."
-    )
-    assert json.loads(path.read_text().splitlines()[-1])["event"] == "stopped"
+    with pytest.raises(LimitError, match="stopped after 3 steps"):
+        await run(llm, tmp=tmp_path, max_steps=3)
+    assert len(llm.requests) == 3
+    last = json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[-1])
+    assert last["event"] == "stopped" and last["reason"] == "step cap"
 
 
 async def test_token_budget_stops_the_run(tmp_path):
     """Once prompt+completion tokens reach the budget, no further LLM call is made."""
     llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(5)])  # 15 tokens per call
-    answer, _, path = await run(llm, tmp=tmp_path, max_tokens=20)
-    assert len(llm.requests) == 2 and "token budget of 20 reached after 30 tokens" in answer
-    assert json.loads(path.read_text().splitlines()[-1])["reason"] == "token budget"
+    with pytest.raises(LimitError, match="token budget of 20 reached after 30 tokens"):
+        await run(llm, tmp=tmp_path, max_tokens=20)
+    assert len(llm.requests) == 2
+    assert json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[-1])["reason"] == "token budget"
+
+
+async def test_missing_usage_is_estimated_and_budget_still_applies(tmp_path):
+    """A reply without usage does not crash, and the token budget still counts an estimate."""
+    no_usage = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[call("c", "s__read")]))],
+        usage=None,
+    )
+    llm = ScriptedLLM([no_usage] * 3)
+    with pytest.raises(LimitError, match="token budget"):
+        await run(llm, tmp=tmp_path, max_tokens=1)
+    assert len(llm.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        SimpleNamespace(choices=[], usage=None),
+        SimpleNamespace(choices=None, usage=None, error={"message": "provider down"}),
+        SimpleNamespace(choices=[SimpleNamespace(message=None)], usage=None),
+    ],
+)
+async def test_unusable_llm_response_is_an_llm_error(tmp_path, bad):
+    """Empty choices, an error payload or a missing message raise LLMError, not IndexError/TypeError."""
+    with pytest.raises(LLMError, match="unusable response"):
+        await run(ScriptedLLM([bad]), tmp=tmp_path)
+
+
+async def test_circuit_breaker_on_repeated_tool_errors(tmp_path):
+    """Consecutive failing tool calls stop the run instead of looping to the step cap."""
+    router = RecordingRouter("ERROR: Daily free limit reached")
+    llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(10)])
+    with pytest.raises(ToolFailureError, match="3 tool calls failed in a row.*Daily free limit"):
+        await run(llm, router, tmp=tmp_path, max_tool_errors=3)
+    assert len(router.calls) == 3 and len(llm.requests) == 3
+
+
+async def test_repeated_denied_writes_trip_the_circuit_breaker(tmp_path):
+    """A model that keeps retrying a denied write is stopped instead of looping to the step cap."""
+    llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__write", "{}")]) for i in range(10)])
+    with pytest.raises(ToolFailureError, match="3 tool calls failed in a row.*Denied by human reviewer"):
+        await run(llm, pol=policy(lambda p: "n"), tmp=tmp_path, max_tool_errors=3)
+    assert len(llm.requests) == 3
+
+
+async def test_success_resets_the_failure_count(tmp_path):
+    """A successful tool call between failures keeps the circuit breaker from tripping."""
+
+    class Flaky(RecordingRouter):
+        async def call(self, name, args):
+            """Fail on odd calls, succeed on even ones."""
+            self.calls.append((name, args))
+            return "ERROR: boom" if len(self.calls) % 2 else "fine"
+
+    llm = ScriptedLLM([reply(calls=[call(f"c{i}", "s__read")]) for i in range(4)] + [reply("done")])
+    answer, _, _ = await run(llm, Flaky(), tmp=tmp_path, max_tool_errors=2)
+    assert answer == "done"
+
+
+async def test_tracer_failure_does_not_break_the_run(tmp_path, capsys):
+    """An unwritable trace file only warns (once); the run still completes."""
+    bad_path = str(tmp_path / "no_such_dir" / "trace.jsonl")
+    llm = ScriptedLLM([reply(calls=[call("c1", "s__read")]), reply("done")])
+    answer = await run_agent("q", RecordingRouter(), policy(), Tracer(bad_path), llm)
+    assert answer == "done" and capsys.readouterr().err.count("cannot write trace file") == 1
 
 
 async def test_injection_only_inside_wrapper(tmp_path):
@@ -174,9 +241,9 @@ async def test_tracer_lines(tmp_path):
 
 
 async def test_llm_exception_propagates(tmp_path):
-    """An LLM failure surfaces with a clear message and no retry."""
+    """An LLM failure surfaces as an LLMError with a clear message and no extra attempt by the loop."""
     llm = ScriptedLLM([])  # raises AssertionError on first call
-    with pytest.raises(RuntimeError, match="LLM call failed"):
+    with pytest.raises(LLMError, match="LLM call failed"):
         await run(llm, tmp=tmp_path)
     assert len(llm.requests) == 1
 
@@ -195,14 +262,16 @@ async def test_invalid_question_rejected(tmp_path):
 
 
 class StubRouter:
-    """ToolRouter stand-in for main(): optionally fails to start."""
+    """ToolRouter stand-in for main(): optionally fails to start, and records the strict flag."""
 
     fail = False
+    strict = None
 
-    async def start(self):
+    async def start(self, strict=True):
         """Raise like a server that failed to connect, if configured."""
+        StubRouter.strict = strict
         if self.fail:
-            raise RuntimeError("MCP server 'x' failed to start: boom")
+            raise ServerError("x", "failed to start: boom")
 
     async def list_all_tools(self):
         """Return fixed raw tool names."""
@@ -220,26 +289,28 @@ async def run_main(monkeypatch, argv, fail=False):
     await agent.main()
 
 
-async def test_main_without_prompt_prints_usage(monkeypatch):
-    """No arguments exits with a usage message."""
-    with pytest.raises(SystemExit, match="Usage"):
+async def test_main_without_prompt_raises_usage(monkeypatch):
+    """No arguments raises an InputError carrying the usage text."""
+    with pytest.raises(InputError, match="Usage"):
         await run_main(monkeypatch, [])
 
 
-async def test_main_startup_failure_is_a_clean_error(monkeypatch):
-    """A server that fails to start exits with one clear line, not a traceback."""
-    with pytest.raises(SystemExit, match="Error: MCP server 'x' failed to start"):
+async def test_main_startup_failure_propagates_as_server_error(monkeypatch):
+    """A failed server surfaces as a ServerError naming it (the global handler prints it)."""
+    with pytest.raises(ServerError, match="MCP server 'x' failed to start"):
         await run_main(monkeypatch, ["hi"], fail=True)
 
 
-async def test_main_list_tools(monkeypatch, capsys):
-    """--list-tools prints the raw tool names per server."""
+async def test_main_list_tools_is_not_strict(monkeypatch, capsys):
+    """--list-tools prints raw names and starts non-strict, so it still works after a tool rename."""
     await run_main(monkeypatch, ["--list-tools"])
-    assert "srv: a, b" in capsys.readouterr().out
+    assert "srv: a, b" in capsys.readouterr().out and StubRouter.strict is False
 
 
-async def test_main_requires_api_key(monkeypatch):
-    """A missing OPENROUTER_API_KEY fails fast with a clear message."""
+async def test_main_requires_api_key_before_connecting(monkeypatch):
+    """A missing OPENROUTER_API_KEY raises ConfigError before any server is started."""
     monkeypatch.setattr(config, "OPENROUTER_API_KEY", "")
-    with pytest.raises(SystemExit, match="OPENROUTER_API_KEY is missing"):
+    StubRouter.strict = "untouched"
+    with pytest.raises(ConfigError, match="OPENROUTER_API_KEY is missing"):
         await run_main(monkeypatch, ["hi"])
+    assert StubRouter.strict == "untouched"

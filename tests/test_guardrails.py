@@ -105,3 +105,31 @@ def test_empty_and_unicode():
     """Empty and non-ASCII text wrap cleanly."""
     assert wrap_output("t", "") == '<tool_output tool="t"></tool_output>'
     assert "취약점 ✓" in wrap_output("t", "취약점 ✓")
+
+
+def test_approval_prompt_failure_denies_the_write():
+    """If the approval prompt itself breaks (no stdin), the write is denied: fail closed."""
+
+    def no_stdin(prompt):
+        raise EOFError
+
+    ok, reason = Policy({"w"}, {"w"}, no_stdin).authorize("w", {})
+    assert ok is False and "approval prompt failed (EOFError)" in reason
+
+
+def test_ctrl_c_at_the_prompt_is_not_swallowed():
+    """Ctrl+C at the approval prompt aborts the run instead of counting as a denial."""
+
+    def interrupt(prompt):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        Policy({"w"}, {"w"}, interrupt).authorize("w", {})
+
+
+def test_check_input_raises_input_error():
+    """Bad prompts raise InputError (which is also a ValueError)."""
+    from errors import InputError
+
+    with pytest.raises(InputError, match="Prompt is empty"):
+        check_input("  ")

@@ -60,3 +60,25 @@ def test_timeout_and_token_budget_env(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+@pytest.mark.parametrize(
+    "name,value,message",
+    [
+        ("TIMEOUT_SECONDS", "abc", "TIMEOUT_SECONDS must be a number, got 'abc'"),
+        ("TIMEOUT_SECONDS", "0", "TIMEOUT_SECONDS must be at least"),
+        ("MAX_TOTAL_TOKENS", "-5", "MAX_TOTAL_TOKENS must be at least"),
+        ("MAX_TOTAL_TOKENS", "1e6", "MAX_TOTAL_TOKENS must be a number"),
+    ],
+)
+def test_invalid_numeric_settings_raise_config_error(monkeypatch, name, value, message):
+    """Bad numeric env values fail fast with a ConfigError naming the setting."""
+    from errors import ConfigError
+
+    monkeypatch.setenv(name, value)
+    try:
+        with pytest.raises(ConfigError, match=message):
+            importlib.reload(config)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)

@@ -9,6 +9,7 @@ import pytest
 import config
 from agent import Tracer, run_agent
 from config import ServerSpec
+from errors import ServerError
 from guardrails import Policy
 from mcp_clients import MCPConnection
 from tests.conftest import ScriptedLLM, call, fake_spec, fs_spec, reply, started
@@ -46,8 +47,8 @@ async def test_router_paths():
 
 async def test_tool_call_times_out(monkeypatch):
     """A tool slower than TIMEOUT_SECONDS returns an error string instead of hanging."""
-    monkeypatch.setattr(config, "TIMEOUT_SECONDS", 1.0)
     async with started([fake_spec()]) as router:
+        monkeypatch.setattr(config, "TIMEOUT_SECONDS", 1.0)  # only after startup, which can take a moment
         out = await router.call("fake__slow", {})
     assert out.startswith("ERROR") and "timed out after 1s" in out
 
@@ -56,9 +57,27 @@ async def test_connect_times_out_naming_server(monkeypatch):
     """A server that never completes the handshake fails start() with a clear, named error."""
     monkeypatch.setattr(config, "TIMEOUT_SECONDS", 1.0)
     hang = ServerSpec("hang", "stdio", {"x"}, command=sys.executable, args=["-c", "import time; time.sleep(30)"])
-    with pytest.raises(RuntimeError, match="'hang'.*timed out after 1s"):
+    with pytest.raises(ServerError, match="'hang' failed to start: TimeoutError: connecting timed out after 1s"):
         async with started([hang]):
             pass
+
+
+async def test_unreachable_http_server_is_a_clean_server_error():
+    """A remote server that refuses connections gives a ServerError with the real cause, not a raw cancellation."""
+    dead = ServerSpec("security", "http", {"x"}, url="http://127.0.0.1:9/mcp")
+    with pytest.raises(ServerError, match="'security' failed to start: .*ConnectError"):
+        async with started([dead]):
+            pass
+
+
+async def test_timed_out_write_says_it_may_have_completed(monkeypatch):
+    """A timeout on a write tool warns that the write may still have happened."""
+    spec = fake_spec()
+    spec.write_tools = {"slow"}
+    async with started([spec]) as router:
+        monkeypatch.setattr(config, "TIMEOUT_SECONDS", 1.0)
+        out = await router.call("fake__slow", {})
+    assert "timed out after 1s; as a write it may still have completed" in out
 
 
 async def test_full_run_with_approved_write(tmp_path):

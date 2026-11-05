@@ -6,6 +6,7 @@ import pytest
 
 import config
 from agent import Tracer, run_agent
+from errors import LimitError, ToolFailureError
 from guardrails import Policy
 from tests.conftest import fs_spec, started
 
@@ -66,7 +67,10 @@ async def ask_agent(question: str, ws: Path, approve: bool) -> tuple[str, list[d
     policy = Policy(config.allowed_tools(specs), config.write_tools(specs), lambda p: "y" if approve else "n")
     llm = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.LLM_BASE_URL, timeout=config.TIMEOUT_SECONDS)
     async with started(specs) as router:
-        answer = await run_agent(question, router, policy, Tracer(str(trace)), llm)
+        try:
+            answer = await run_agent(question, router, policy, Tracer(str(trace)), llm)
+        except (LimitError, ToolFailureError) as e:  # a model that loops is stopped safely; assertions still apply
+            answer = f"[run stopped] {e}"
     return answer, [json.loads(l) for l in trace.read_text().splitlines()]
 
 

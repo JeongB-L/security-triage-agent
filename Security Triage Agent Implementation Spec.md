@@ -45,6 +45,8 @@ Persistent memory or database, planning step, multi-agent, UI, evals, authentica
    NVD, CISA KEV, FIRST EPSS
 ```
 
+The diagram is also available as a picture, `docs/architecture.png`, which the README displays.
+
 A tool call flows from the LLM through guardrails and the router to one MCP client, then its server; the result returns to the loop as a tool message.
 
 - **Host** (`agent.py` process): owns the loop, context, LLM calls, and logging. It creates one MCP client per server.
@@ -90,16 +92,19 @@ security-triage-agent/
   .env.example              # OPENROUTER_API_KEY= and optional overrides
   .gitignore                # .env, .env.*, !.env.example, trace.jsonl, __pycache__/, .venv/, .pytest_cache/, .coverage
   config.py                 # all constants, env settings and server specs
+  errors.py                 # exception hierarchy + global error handler
   mcp_clients.py            # MCP clients (Security, Filesystem) + tool router
   guardrails.py             # policy layer
   agent.py                  # host: loop, context, LLM call, trace, CLI
   examples/sample_run.md    # trimmed real trace and final answer
+  docs/architecture.png     # architecture diagram shown in the README
   workspace/
     package.json            # demo manifest (seeded, see below)
   tests/
     conftest.py             # shared fixtures and test doubles
     fixtures/fake_server.py # test-only MCP server
     test_config.py
+    test_errors.py
     test_guardrails.py
     test_router.py          # includes schema conversion
     test_agent_loop.py      # includes command-line (main) tests
@@ -114,7 +119,7 @@ security-triage-agent/
 
 ## Coding standards
 
-Implementation stays compact (about 480 lines across the four files, including docstrings and comments); test code has no length limit.
+Implementation stays compact (about 590 lines across the five files, including docstrings and comments); test code has no length limit.
 
 **Comments (implementation and tests)**
 
@@ -137,10 +142,19 @@ Implementation stays compact (about 480 lines across the four files, including d
 
 ## Module specs
 
+### errors.py (error model)
+
+- `AgentError(Exception)`: base class for every error the agent raises on purpose.
+- Subclasses: `ConfigError` (invalid `.env` value, missing key), `InputError` (bad prompt or command line; also a `ValueError`), `ServerError(server, detail)` (an MCP server failed to start, is unreachable, no longer offers an allowlisted tool, or could not be listed; the message names the server), `LLMError` (the call failed, or the provider returned no choices, an error payload or no message), `LimitError` (step cap or token budget reached), `ToolFailureError` (too many consecutive failed tool calls).
+- `describe(exc)`: one readable line for an exception, flattening exception groups from async transports (for example `ConnectError: All connection attempts failed`).
+- `install_excepthook()`: installs the global handler on `sys.excepthook`. An `AgentError` prints as `Error: <message>` on stderr and the process exits non-zero; `KeyboardInterrupt` prints `Interrupted.`; any other exception is a bug and keeps its traceback. `agent.py` installs it before importing `config`, so errors raised at import time are covered too.
+
+**Principles.** Recoverable problems inside a run (tool errors, timeouts, bad tool arguments, refused paths, denied writes) are returned to the LLM as tool messages so it can adapt. Problems that end a run raise a typed `AgentError`, and only the global handler turns them into output. The approval gate fails closed. Cleanup never masks the original error. Safety limits cannot be bypassed by missing data (a reply without token usage is estimated). Nothing swallows `KeyboardInterrupt` or `CancelledError`.
+
 ### config.py (constants, env settings, server specs)
 
-- Loads `.env` with `python-dotenv`.
-- Constants: `MODEL` (env `MODEL`, default `openai/gpt-4.1-mini`), `LLM_BASE_URL` (env, default `https://openrouter.ai/api/v1`), `OPENROUTER_API_KEY` (env), `MAX_STEPS = 50`, `MAX_TOTAL_TOKENS` (env, default 1,000,000), `TIMEOUT_SECONDS` (env, default 60), `MAX_TOOL_OUTPUT_CHARS = 3000` (above 2000 because `cve_lookup` puts the EPSS field about 2100 characters in), `MAX_INPUT_CHARS = 2000`, `TRACE_PATH = "trace.jsonl"`, `WORKSPACE` (absolute path of `./workspace`), `TOKEN_OPTIMIZATION` (env `on`/`off`, default on).
+- Loads `.env` with `python-dotenv`. Numeric settings (`MAX_TOTAL_TOKENS`, `TIMEOUT_SECONDS`) are validated at import: a non-number or too-small value raises `ConfigError` naming the setting.
+- Constants: `MODEL` (env `MODEL`, default `openai/gpt-4.1-mini`), `LLM_BASE_URL` (env, default `https://openrouter.ai/api/v1`), `OPENROUTER_API_KEY` (env), `MAX_STEPS = 50`, `MAX_TOTAL_TOKENS` (env, default 1,000,000), `TIMEOUT_SECONDS` (env, default 60), `LLM_MAX_RETRIES = 2` (the OpenAI SDK's own bounded retries for 429, 5xx and timeouts), `MAX_CONSECUTIVE_TOOL_ERRORS = 5`, `MAX_TOOL_OUTPUT_CHARS = 3000` (above 2000 because `cve_lookup` puts the EPSS field about 2100 characters in), `MAX_INPUT_CHARS = 2000`, `TRACE_PATH = "trace.jsonl"`, `WORKSPACE` (absolute path of `./workspace`), `TOKEN_OPTIMIZATION` (env `on`/`off`, default on).
 - `ServerSpec`: a small dataclass with `name`, `transport` (`"stdio"` or `"http"`), `allowed_tools: set[str]` (unprefixed), `write_tools: set[str]` (unprefixed), `command`, `args`, `env`, `url`.
 - `security_spec()` (Datakoot over HTTP) and `files_spec()` (Filesystem over stdio with `WORKSPACE` as its only argument); `SERVERS = [security_spec(), files_spec()]`. The `name` becomes the tool prefix.
 - `allowed_tools(servers=None)` and `write_tools(servers=None)` return the prefixed sets (for example `security__cve_lookup`, `files__write_file`) derived from `SERVERS`, so allowlists live next to the server they belong to.
@@ -152,24 +166,25 @@ Implementation stays compact (about 480 lines across the four files, including d
 - `__init__(spec: ServerSpec)`
 - `async connect(stack: AsyncExitStack)`: open the transport (`stdio_client` or `streamable_http_client`), open a `ClientSession`, run `initialize`
 - `async list_tools()`, `async call_tool(name, args)`
-- Connecting, listing tools, and every tool call run inside a time limit of `TIMEOUT_SECONDS` (`asyncio.timeout`, so it stays in the same task as the transport's cancel scopes). A timeout raises `TimeoutError("<what> timed out after Ns")`.
+- Connecting, listing tools, and every tool call run inside a time limit of `TIMEOUT_SECONDS` (`asyncio.timeout`, so it stays in the same task as the transport's cancel scopes). A timeout raises `TimeoutError("<what> timed out after Ns")`; for a write tool the message adds that it may still have completed.
+- `connect` opens the transport and session in a private `AsyncExitStack` and hands it to the caller's stack only after `initialize` succeeds. If the handshake fails, unwinding the private stack surfaces the real cause (for example a refused connection) instead of a bare cancellation.
 
 **`ToolRouter`**: owns all connections; the only thing `agent.py` talks to.
 
 - `__init__(specs=None)`: default `config.SERVERS`
-- `async start() -> dict[str, int]`: connect every server, list tools, keep only each spec's `allowed_tools`, build `self.openai_tools`, return the tool count per server. A server that fails or times out raises `RuntimeError("MCP server '<name>' failed to start: ...")`.
+- `async start(strict=True) -> dict[str, int]`: connect every server, list tools, keep only each spec's `allowed_tools`, build `self.openai_tools`, return the tool count per server. A server that fails, is unreachable or times out raises `ServerError` ("MCP server '<name>' failed to start: <cause>"). When `strict`, an allowlisted tool the server no longer offers also raises `ServerError` naming it and pointing to `--list-tools`. `--list-tools` starts with `strict=False` so it keeps working after a rename.
 - `to_openai_schema(server, tool)` (module-level): MCP `name`, `description`, `input_schema` to `{"type":"function","function":{"name": f"{server}__{name}", "description", "parameters"}}`
 - `result_to_text(result)` (module-level): prefer `structured_content` as JSON, else join text blocks (other blocks become `[<type> content omitted]`); `is_error` becomes `"ERROR: ..."`
-- `async call(prefixed_name, args) -> str`: split on the first `__`, re-check the allowlist, route. An unknown server or tool returns `"ERROR: unknown tool"`; any exception, including a timeout, returns an error string. It never raises.
-- `async list_all_tools()`: raw names per server, unfiltered (for `--list-tools`)
-- `async close()`
+- `async call(prefixed_name, args) -> str`: split on the first `__`, re-check the allowlist, route. An unknown server or tool returns `"ERROR: unknown tool"`; any exception, including a timeout or a transport failure, returns an error string built with `describe`. It never raises.
+- `async list_all_tools()`: raw names per server, unfiltered (for `--list-tools`); a failing server raises `ServerError`
+- `async close()`: best effort; a cleanup failure prints a warning to stderr and never raises, so it cannot mask the original error
 
 ### guardrails.py (policy layer)
 
-- `check_input(text) -> str`: strip; reject empty or over `MAX_INPUT_CHARS` with `ValueError`
+- `check_input(text) -> str`: strip; reject empty or over `MAX_INPUT_CHARS` with `InputError`
 - `class Policy(allowed, writes, ask=input)` with `authorize(name, args) -> tuple[bool, str]`:
   - not allowed: `(False, "Tool not allowed by policy")`
-  - write tool: show the name and pretty JSON args, call `ask("Approve? [y/N] ")`; anything but `y`/`Y` gives `(False, "Denied by human reviewer")`
+  - write tool: show the name and pretty JSON args, call `ask("Approve? [y/N] ")`; anything but `y`/`Y` gives `(False, "Denied by human reviewer")`. If `ask` itself raises (no stdin, broken terminal) the write is denied (fail closed). `KeyboardInterrupt` is not swallowed.
   - otherwise `(True, "")`
 - `shape_output(name, text) -> str`: pass-through hook reserved for field shaping
 - `wrap_output(name, text) -> str`: `shape_output`, strip any `<tool_output` / `</tool_output>` tags inside the text (any case), truncate to `MAX_TOOL_OUTPUT_CHARS` with `[truncated N chars]` when `TOKEN_OPTIMIZATION` is on, wrap in `<tool_output tool="name">...</tool_output>`
@@ -178,8 +193,9 @@ Implementation stays compact (about 480 lines across the four files, including d
 
 - `SYSTEM_PROMPT`: constant, text in the next section
 - `class Tracer(path)`: `log(event, step, **data)` appends one JSON line and prints a one-line console summary
-- `async run_agent(question, router, policy, tracer, llm, model=config.MODEL, max_steps=config.MAX_STEPS, max_tokens=config.MAX_TOTAL_TOKENS) -> str`: the loop. `llm` is any object with the async OpenAI `chat.completions.create` shape.
-- `main()`: `python agent.py "<prompt>"` runs the agent; `python agent.py --list-tools` prints raw tool names per server. Startup failures, missing key, bad input and LLM errors exit with one clear `Error: ...` line, not a traceback.
+- `async run_agent(question, router, policy, tracer, llm, model=..., max_steps=..., max_tokens=..., max_tool_errors=...) -> str`: the loop. `llm` is any object with the async OpenAI `chat.completions.create` shape. It returns the final answer or raises `InputError`, `LLMError`, `LimitError` or `ToolFailureError`; it never returns a stop message as if it were an answer.
+- `main()`: `python agent.py "<prompt>"` runs the agent; `python agent.py --list-tools` prints raw tool names per server. It checks the API key before connecting to anything and raises `AgentError` subclasses on failure; the global handler prints them as one `Error: ...` line with a non-zero exit code. Stdout is set to replace unencodable characters, so printing never crashes a finished run.
+- `Tracer.log` never breaks a run: a trace-file write error prints one warning and the run continues.
 
 ## Agent loop and system prompt
 
@@ -195,12 +211,12 @@ The loop is ReAct: the model reasons, picks tools, observes results, and repeats
 1. `check_input(prompt)`.
 2. Context assembly: `messages = [system, user]`. Conversation history is the only memory, and it is discarded at the end of the run.
 3. For `step` in `1..max_steps`:
-   1. If the tokens used so far (prompt plus completion across all LLM calls) reached `max_tokens`, log `stopped` and return `"Stopped: token budget of N reached after M tokens."`
-   2. Call the LLM (temperature 0) with `messages` and `tools=router.openai_tools`. Log `llm_call` with token usage. An LLM exception becomes `RuntimeError("LLM call failed: ...")`, with no silent retry.
+   1. If the tokens used so far (prompt plus completion across all LLM calls) reached `max_tokens`, log `stopped` and raise `LimitError`.
+   2. Call the LLM (temperature 0) with `messages` and `tools=router.openai_tools`. The SDK retries transient errors up to `LLM_MAX_RETRIES` times; after that, an exception becomes `LLMError("LLM call failed: ...")`. A reply with no choices, an error payload or no message raises `LLMError`. A reply without token usage is estimated (about 4 characters per token) so the budget still applies. Log `llm_call` with token usage.
    3. Append the assistant message (including `tool_calls`) to `messages`.
    4. No `tool_calls`: log `final`, return the content.
-   5. For each tool call (there may be several): parse JSON args (bad JSON or non-object args give an error tool message), `policy.authorize`, then `router.call` or the denial reason, then `wrap_output`. Append one `{"role":"tool","tool_call_id":...,"content":...}` per call. Log `tool_call` with name, args, allowed, result length.
-4. Step cap reached: log `stopped`, return `"Stopped after N steps without a final answer."`
+   5. For each tool call (there may be several): parse JSON args (bad JSON or non-object args give an error tool message), `policy.authorize`, then `router.call` or the denial reason, then `wrap_output`. Append one `{"role":"tool","tool_call_id":...,"content":...}` per call. Log `tool_call` with name, args, allowed, result length. A failed call (error text, bad arguments or a denial) adds to a consecutive-failure count and a success resets it; at `MAX_CONSECUTIVE_TOOL_ERRORS` the run raises `ToolFailureError` instead of looping.
+4. Step cap reached: log `stopped` and raise `LimitError`.
 5. Nothing a tool returns can crash the loop; failures and timeouts become tool messages.
 
 **System prompt (as implemented in `agent.py`)**
@@ -243,15 +259,16 @@ Several of these rules were added after live runs showed the model announcing ac
 
 ## Testing
 
-Tests are the robustness story: every branch of the implementation is exercised offline and deterministically, and a separate live suite checks the real servers and real model. Use `pytest`, `pytest-asyncio`, and `pytest-cov`. `pytest` runs everything and prints each result; `pytest -m "not live"` is the offline subset and needs no network or API key (Filesystem tests need Node and skip without `npx`). Current state: 73 offline tests, about 97% coverage.
+Tests are the robustness story: every branch of the implementation is exercised offline and deterministically, and a separate live suite checks the real servers and real model. Use `pytest`, `pytest-asyncio`, and `pytest-cov`. `pytest` runs everything and prints each result; `pytest -m "not live"` is the offline subset and needs no network or API key (Filesystem tests need Node and skip without `npx`). Current state: 107 offline tests, about 98% coverage.
 
 | File | Layer | Needs network | Covers |
 | --- | --- | --- | --- |
 | `test_config.py` | Unit | No | Server specs, prefixed allowlists, token/timeout env settings |
+| `test_errors.py` | Unit | No | Exception hierarchy, readable descriptions, global handler |
 | `test_guardrails.py` | Unit | No | Input check, policy, approval, wrapping, truncation, token switch |
 | `test_router.py` | Unit, fake connections | No | Schema conversion, routing, result conversion, error handling, filtering |
-| `test_agent_loop.py` | Unit, scripted LLM | No | Every loop branch, tracing, token budget, command-line paths |
-| `test_integration.py` | Real MCP client + test server | No (Filesystem tests need Node) | Real stdio protocol, timeouts, full scripted runs |
+| `test_agent_loop.py` | Unit, scripted LLM | No | Every loop branch, tracing, limits, circuit breaker, bad LLM responses, command-line paths |
+| `test_integration.py` | Real MCP client + test server | No (Filesystem tests need Node) | Real stdio protocol, timeouts, unreachable server, full scripted runs |
 | `test_live.py` | Live, marked `live` | Yes | Real Datakoot server; real model with the real Filesystem server |
 
 ### Test doubles (in `conftest.py` and `tests/fixtures/`)
@@ -266,15 +283,17 @@ Tests are the robustness story: every branch of the implementation is exercised 
 
 ### Required cases
 
-**test_config.py:** every allowlisted name is prefixed with its server name and `__`; write tools are a subset of allowed tools; the security spec is Datakoot over HTTP with four tools; the Filesystem spec passes exactly one argument, the absolute workspace path; `TOKEN_OPTIMIZATION` parses on/off values; `TIMEOUT_SECONDS` and `MAX_TOTAL_TOKENS` come from the environment while `MAX_STEPS` stays 50.
+**test_errors.py:** every deliberate error derives from `AgentError`; `ServerError` names its server; `InputError` is also a `ValueError`; `describe` flattens nested exception groups; the global handler prints an `AgentError` as one line, reports Ctrl+C cleanly, keeps tracebacks for unexpected bugs, and installs on `sys.excepthook`.
 
-**test_guardrails.py:** `check_input` (empty, whitespace-only, exactly the limit accepted, one over rejected, whitespace stripped); `Policy` (read tool passes without asking; unknown tool denied without asking; `y`/`Y` approve; `n`, empty, `yes`, whitespace deny; the prompt shows the tool name and args); `wrap_output` (format; under, at and over the limit; correct truncation count; truncation skipped when the token switch is off; embedded wrapper tags removed in any case; empty and unicode text).
+**test_config.py:** invalid numeric settings raise `ConfigError` naming the setting; every allowlisted name is prefixed with its server name and `__`; write tools are a subset of allowed tools; the security spec is Datakoot over HTTP with four tools; the Filesystem spec passes exactly one argument, the absolute workspace path; `TOKEN_OPTIMIZATION` parses on/off values; `TIMEOUT_SECONDS` and `MAX_TOTAL_TOKENS` come from the environment while `MAX_STEPS` stays 50.
 
-**test_router.py:** name prefixing, description passthrough, missing description or schema defaults, nested and required fields preserved; routing by prefix and splitting only on the first `__`; unknown server, tool or malformed name returns `"ERROR: unknown tool"`; error results and exceptions return error strings; structured content preferred; text blocks joined and non-text replaced; `start()` filters to the allowlist; a failing server raises an error naming it.
+**test_guardrails.py:** `check_input` (empty, whitespace-only, exactly the limit accepted, one over rejected, whitespace stripped); `Policy` (read tool passes without asking; unknown tool denied without asking; `y`/`Y` approve; `n`, empty, `yes`, whitespace deny; the prompt shows the tool name and args); a failing approval prompt (no stdin) denies the write and Ctrl+C at the prompt is not swallowed; `check_input` raises `InputError`; `wrap_output` (format; under, at and over the limit; correct truncation count; truncation skipped when the token switch is off; embedded wrapper tags removed in any case; empty and unicode text).
 
-**test_agent_loop.py:** immediate final answer; one tool call then final; three calls in one turn keep order and ids; malformed or non-object arguments give an error message and the loop continues; a disallowed tool never reaches the router; denied write does not call the router and the denial reaches the model; approved write calls the router once with the exact args; step cap; token budget stops the run; injection content stays inside one wrapper; system prompt and tool schemas are sent on every call; tracer lines carry step numbers and token counts; an LLM exception propagates as a clear `RuntimeError` with no retry; invalid input is rejected before any LLM call; `main()` handles no prompt, startup failure, `--list-tools`, and a missing key.
+**test_router.py:** name prefixing, description passthrough, missing description or schema defaults, nested and required fields preserved; routing by prefix and splitting only on the first `__`; unknown server, tool or malformed name returns `"ERROR: unknown tool"`; error results and exceptions return error strings; structured content preferred; text blocks joined and non-text replaced; `start()` filters to the allowlist; a failing server raises a `ServerError` naming it (exception groups are flattened to the real cause); a missing allowlisted tool raises when strict and is tolerated when not; `list_all_tools` failures raise `ServerError`; `close()` reports cleanup problems without raising.
 
-**test_integration.py:** real `MCPConnection` against `fake_server.py` (initialize, list, call, error and structured paths); a slow tool returns a timeout error string; a server that never completes the handshake fails `start()` with a named error; full `run_agent` with `ScriptedLLM` and a real `ToolRouter`, including approval of `write_note`; Filesystem server (skipped without `npx`): reads the demo manifest, a denied write creates nothing, an approved write lands in the workspace, a path outside the workspace is refused.
+**test_agent_loop.py:** immediate final answer; one tool call then final; three calls in one turn keep order and ids; malformed or non-object arguments give an error message and the loop continues; a disallowed tool never reaches the router; denied write does not call the router and the denial reaches the model; approved write calls the router once with the exact args; step cap and token budget raise `LimitError`; a reply without usage is estimated and the budget still applies; unusable LLM responses (no choices, error payload, no message) raise `LLMError`; repeated tool errors or repeated denied writes trip the circuit breaker, and a success resets it; an unwritable trace file only warns; injection content stays inside one wrapper; system prompt and tool schemas are sent on every call; tracer lines carry step numbers and token counts; an LLM exception raises `LLMError` with no extra attempt by the loop; invalid input is rejected before any LLM call; `main()` raises `InputError` for no prompt, `ServerError` for a startup failure, `ConfigError` for a missing key (before any server starts), and starts non-strict for `--list-tools`.
+
+**test_integration.py:** real `MCPConnection` against `fake_server.py` (initialize, list, call, error and structured paths); a slow tool returns a timeout error string; a server that never completes the handshake fails `start()` with a named `ServerError`; an unreachable HTTP server gives a `ServerError` with the real cause (`ConnectError`), not a bare cancellation; a timed-out write says it may still have completed; full `run_agent` with `ScriptedLLM` and a real `ToolRouter`, including approval of `write_note`; Filesystem server (skipped without `npx`): reads the demo manifest, a denied write creates nothing, an approved write lands in the workspace, a path outside the workspace is refused.
 
 **test_live.py** (10 tests, run by default; `live` marker):
 
@@ -300,7 +319,7 @@ The expensive parts are tool schemas (re-sent on every LLM call) and large resul
 | History compaction (summarize old tool results after N steps) | `run_agent` | Reserved, not built |
 | Cache identical tool calls within a run | `ToolRouter.call` | Reserved, not built |
 
-Other limits: `MAX_STEPS` (50) bounds the loop, and `TIMEOUT_SECONDS` (60) bounds each MCP connect, MCP tool call and LLM call. Reserved items go in the README next steps. `shape_output` exists as a pass-through so shaping can be added without touching the loop.
+Other limits: `MAX_STEPS` (50) bounds the loop, `TIMEOUT_SECONDS` (60) bounds each MCP connect, MCP tool call and LLM call, and `MAX_CONSECUTIVE_TOOL_ERRORS` (5) stops a run that keeps failing. Hitting any of these raises a typed error with a non-zero exit code. Reserved items go in the README next steps. `shape_output` exists as a pass-through so shaping can be added without touching the loop.
 
 ## Acceptance criteria and README
 

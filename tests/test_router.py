@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from config import ServerSpec
+from errors import ServerError
 from mcp_clients import ToolRouter, to_openai_schema
 from tests.conftest import FakeConnection, result
 
@@ -117,7 +118,56 @@ async def test_start_filters_to_allowlist():
 
 
 async def test_failing_server_named_in_error():
-    """A server that fails to connect raises an error naming it."""
+    """A server that fails to connect raises a ServerError naming it, with the cause."""
     r = make_router({"broken": FakeConnection(None, [], exc=OSError("refused"))})
-    with pytest.raises(RuntimeError, match="'broken'"):
+    with pytest.raises(ServerError, match="'broken' failed to start: OSError: refused") as info:
         await r.start()
+    assert info.value.server == "broken"
+
+
+async def test_exception_group_is_flattened_to_its_cause():
+    """Transport failures arrive as exception groups; the message shows the real cause."""
+    r = make_router({"a": FakeConnection(None, [], exc=ExceptionGroup("tg", [OSError("connection refused")]))})
+    with pytest.raises(ServerError, match="OSError: connection refused"):
+        await r.start()
+
+
+async def test_missing_allowlisted_tool_fails_loudly_when_strict():
+    """If a server stops offering an allowlisted tool, start() raises and names the tool."""
+    r = make_router({"a": FakeConnection(None, ["keep"])})
+    r.allowed = {"a": {"keep", "renamed"}}
+    with pytest.raises(ServerError, match="no longer offers allowlisted tool.*renamed.*--list-tools"):
+        await r.start()
+
+
+async def test_missing_allowlisted_tool_is_tolerated_when_not_strict():
+    """--list-tools starts non-strict, so it still works after a tool rename."""
+    r = make_router({"a": FakeConnection(None, ["keep"])})
+    r.allowed = {"a": {"keep", "renamed"}}
+    assert await r.start(strict=False) == {"a": 1}
+
+
+async def test_list_all_tools_failure_is_a_server_error():
+    """A server that cannot list its tools raises a ServerError naming it."""
+    c = FakeConnection(None, ["x"])
+    r = make_router({"a": c})
+
+    async def boom():
+        raise RuntimeError("down")
+
+    c.list_tools = boom
+    with pytest.raises(ServerError, match="'a' could not list tools: RuntimeError: down"):
+        await r.list_all_tools()
+
+
+async def test_close_never_masks_the_real_error(capsys):
+    """A failure while closing connections is reported as a warning, not raised."""
+
+    class BadStack:
+        async def aclose(self):
+            raise RuntimeError("cleanup broke")
+
+    r = make_router({"a": FakeConnection(None, ["x"])})
+    r.stack = BadStack()
+    await r.close()
+    assert "problem while closing MCP connections: RuntimeError: cleanup broke" in capsys.readouterr().err

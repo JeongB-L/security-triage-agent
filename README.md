@@ -1,12 +1,12 @@
 # Security Triage Agent
 
-A single AI agent that triages vulnerabilities in your project's dependencies. Give it a prompt such as "Audit the dependencies in the workspace and tell me what to fix first", and it will:
+A single AI agent system that triages vulnerabilities in your project's dependencies. Give it a prompt such as "Audit the dependencies in the workspace and tell me what to fix first", and it will:
 
-- read your `package.json`
-- look up known vulnerabilities (CVEs) for each package, including whether a flaw is actively exploited (CISA KEV) and how likely it is to be exploited (EPSS)
-- rank the packages from most to least urgent, with the fix version for each
-- write a remediation report to disk, but only after you approve the write
-- report any instructions hidden in the files it reads, instead of following them
+- read your `package.json` within the limited scope that is defined so user needs to place the project within the workspace.
+- look up known vulnerabilities (CVEs) for each package, including whether a flaw is actively exploited (CISA KEV) and how likely it is to be exploited (EPSS).
+- rank the packages from most to least urgent, with the fix version for each.
+- write a remediation report to disk, but only after you approve the write.
+- report any instructions hidden in the files it reads, instead of following them.
 
 It is built in Python around the **ReAct** pattern (reason, act, observe, repeat), with the loop written by hand and no third-party agent library. The agent's tools come from two MCP servers (MCP is a standard way for an agent to discover and call tools in another process). The LLM is reached through OpenRouter.
 
@@ -16,32 +16,7 @@ It is built in Python around the **ReAct** pattern (reason, act, observe, repeat
 
 ## Architecture
 
-```text
- You: "Audit the dependencies and tell me what to fix first"
-   |
-   v
-+-- HOST: agent.py -------------------------------------------------+
-|                                                                   |
-|   Agent loop (ReAct) <-----------> LLM (OpenRouter)               |
-|      |                                                            |
-|      v                                                            |
-|   Guardrails (guardrails.py)                                      |
-|      |                                                            |
-|      v                                                            |
-|   Tool router (mcp_clients.py)                                    |
-|      |                                   |                        |
-|   MCP client (Security)           MCP client (Filesystem)         |
-+------|-----------------------------------|------------------------+
-       | streamable HTTP                   | stdio
-       v                                   v
-+----------------------------+   +--------------------------------+
-| MCP server: Datakoot       |   | MCP server: Filesystem         |
-| Security Intel (remote)    |   | (local, root: ./workspace)     |
-+-------------+--------------+   +--------------------------------+
-              | HTTPS
-              v
-   NVD, CISA KEV, FIRST EPSS
-```
+![Architecture diagram: prompt, agent loop with guardrails and tool router, two MCP clients, two MCP servers](docs/architecture.png)
 
 | Component | Architecture role | What it does | File |
 | --- | --- | --- | --- |
@@ -53,6 +28,7 @@ It is built in Python around the **ReAct** pattern (reason, act, observe, repeat
 | MCP client (Filesystem) | Client, one per server | Starts the Filesystem server as a child process and talks to it over stdio. | `mcp_clients.py` |
 | MCP server: Datakoot Security Intel | Tool provider (remote) | CVE details, KEV, EPSS, package advisories and manifest audits, aggregated from NVD, CISA KEV and FIRST EPSS. Free, no key. | `security.datakoot.com/mcp` |
 | MCP server: Filesystem | Tool provider (local) | Lists, reads and writes files, limited to `workspace/`. It is the `@modelcontextprotocol/server-filesystem` npm package, started with `npx`. | not in this repo |
+| Error model | Cross-cutting | A typed exception hierarchy and one global handler that reports run-ending errors as a single line. | `errors.py` |
 | Config | Settings | Constants, `.env` values, server definitions and per-server tool allowlists. | `config.py` |
 
 Only 7 tools are exposed to the LLM: `cve_lookup`, `epss_score`, `package_vulnerabilities`, `audit_dependencies` from Datakoot, and `list_directory`, `read_text_file`, `write_file` from the Filesystem server. `write_file` is the only tool that changes anything.
@@ -73,7 +49,18 @@ Only 7 tools are exposed to the LLM: `cve_lookup`, `epss_score`, `package_vulner
    5. Add it to the conversation as a tool message.
 4. Go back to step 1, now with the tool results in the conversation.
 
-The loop also stops if the run has used `MAX_TOTAL_TOKENS` tokens (default 1,000,000, prompt plus completion across all LLM calls), or if `MAX_STEPS` steps pass without a final answer. Connecting to a server, each tool call and each LLM call are limited to `TIMEOUT_SECONDS` (default 60). A tool error or tool timeout never crashes the loop, since it is returned to the LLM as text. An LLM API error ends the run with a clear message.
+The run also ends, with an error, if it has used `MAX_TOTAL_TOKENS` tokens (default 1,000,000, prompt plus completion across all LLM calls) or if `MAX_STEPS` steps pass without a final answer. Connecting to a server, each tool call and each LLM call are limited to `TIMEOUT_SECONDS` (default 60).
+
+### Errors
+
+Two kinds of problems are handled differently:
+
+- **Recoverable problems are observations.** A failing tool, a timeout, bad tool arguments, a refused path or a denied write goes back to the LLM as text, so it can adapt. A timed-out `write_file` is reported as "may still have completed", because the server might finish it.
+- **Run-ending problems raise typed errors.** All derive from `AgentError` (`errors.py`): `ConfigError` (bad `.env` value, missing key), `InputError` (bad prompt), `ServerError` (a server fails to start, is unreachable, or no longer offers an allowlisted tool), `LLMError` (the call fails, or the provider returns an unusable response), `LimitError` (step cap or token budget), and `ToolFailureError` (5 failed tool calls in a row, which includes repeated denials, so a failing or looping run stops early).
+
+One global handler (`sys.excepthook`, installed in `errors.py`) prints any `AgentError` as a single `Error: ...` line and exits with a non-zero code, so scripts can tell a stopped run from an answer. Ctrl+C prints `Interrupted.`, and an unexpected exception is a bug, so it keeps its traceback.
+
+Other behavior worth knowing: the approval prompt fails closed (if it cannot read input, the write is denied), `--list-tools` still works after a server renames a tool, the OpenAI client retries transient LLM errors twice before an `LLMError`, and a trace-file problem only prints a warning.
 
 ### Memory
 
@@ -123,7 +110,7 @@ pytest                  # everything, with each result printed
 pytest -m "not live"    # offline only: no key or network needed
 ```
 
-- **Offline tests** (73, about 97% coverage) cover config, guardrails, the router, the agent loop, and the real MCP protocol. Two test doubles do most of the work: a **scripted LLM** that returns queued replies and records every request, so every loop branch runs deterministically with no API, and a **fake MCP server** (`tests/fixtures/fake_server.py`), a real stdio server with tools for echo, errors, large output, structured output, slow calls and injected text. The Filesystem server tests are skipped if `npx` is missing.
+- **Offline tests** (107, about 98% coverage) cover config, guardrails, the router, the agent loop, and the real MCP protocol. Two test doubles do most of the work: a **scripted LLM** that returns queued replies and records every request, so every loop branch runs deterministically with no API, and a **fake MCP server** (`tests/fixtures/fake_server.py`), a real stdio server with tools for echo, errors, large output, structured output, slow calls and injected text. The Filesystem server tests are skipped if `npx` is missing.
 - **Live tests** (10) use the real servers. Five call Datakoot directly. Five run the real model against the real Filesystem server in a temp folder. The model tests need `OPENROUTER_API_KEY`, and the Datakoot tests skip when the daily limit is reached.
 
 ## Token optimization

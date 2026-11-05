@@ -5,15 +5,16 @@ import re
 from typing import Callable
 
 import config
+from errors import InputError
 
 
 def check_input(text: str) -> str:
-    """Strip the question; reject empty or oversized input."""
+    """Strip the prompt; reject empty or oversized input."""
     text = text.strip()
     if not text:
-        raise ValueError("Question is empty")
+        raise InputError("Prompt is empty")
     if len(text) > config.MAX_INPUT_CHARS:
-        raise ValueError(f"Question exceeds {config.MAX_INPUT_CHARS} characters")
+        raise InputError(f"Prompt exceeds {config.MAX_INPUT_CHARS} characters")
     return text
 
 
@@ -34,7 +35,12 @@ class Policy:
         # Writes pause for explicit approval; only y/Y counts as yes.
         if name in self.writes:
             print(f"\nProposed write tool: {name}\n{json.dumps(args, indent=2)}")
-            if self.ask("Approve? [y/N] ") not in ("y", "Y"):
+            # Fail closed: if the prompt itself breaks (no stdin, broken terminal), the write is denied.
+            try:
+                answer = self.ask("Approve? [y/N] ")
+            except Exception as e:
+                return False, f"Denied: approval prompt failed ({type(e).__name__})"
+            if answer not in ("y", "Y"):
                 return False, "Denied by human reviewer"
         return True, ""
 
