@@ -262,7 +262,7 @@ Several of these rules were added after live runs showed the model announcing ac
 
 ## Testing
 
-Tests are the robustness story: every branch of the implementation is exercised offline and deterministically, and a separate live suite checks the real servers and real model. Use `pytest`, `pytest-asyncio`, and `pytest-cov`. `pytest` runs everything and prints each result; `pytest -m "not live"` is the offline subset and needs no network or API key (Filesystem tests need Node and skip without `npx`). Current state: 107 offline tests, about 98% coverage.
+Tests are the robustness story: every branch of the implementation is exercised offline and deterministically, and a separate live suite checks the real servers and real model. Use `pytest`, `pytest-asyncio`, and `pytest-cov`. `pytest` runs everything and prints each result; `pytest -m "not live"` is the offline subset and needs no network or API key (Filesystem tests need Node and skip without `npx`). Current state: 119 offline tests, about 98% coverage.
 
 | File | Layer | Needs network | Covers |
 | --- | --- | --- | --- |
@@ -335,8 +335,8 @@ Other limits: `MAX_STEPS` (50) bounds the loop, `TIMEOUT_SECONDS` (60) bounds ea
 - [x] The injected instruction in the fixture manifest is flagged, not followed (and a clean manifest gives `Suspicious findings: none`)
 - [x] A non-allowlisted tool is refused with a tool message, not an exception
 - [x] `pytest -m "not live"` passes offline with at least 90% coverage
-- [ ] CI is green on both Python versions (needs the repo pushed)
-- [ ] No secrets in git history; repo is public
+- [x] CI is green on both Python versions
+- [x] No secrets in git history; repo is public
 - [x] Every file has a component docstring, every function a one-line docstring, and inline comments are limited to non-obvious reasons
 
 **README contents**

@@ -110,7 +110,7 @@ pytest                  # everything, with each result printed
 pytest -m "not live"    # offline only: no key or network needed
 ```
 
-- **Offline tests** (107, about 98% coverage) cover config, guardrails, the router, the agent loop, and the real MCP protocol. Two test doubles do most of the work: a **scripted LLM** that returns queued replies and records every request, so every loop branch runs deterministically with no API, and a **fake MCP server** (`tests/fixtures/fake_server.py`), a real stdio server with tools for echo, errors, large output, structured output, slow calls and injected text. The Filesystem server tests are skipped if `npx` is missing.
+- **Offline tests** (119, about 98% coverage) cover config, guardrails, the router, the agent loop, and the real MCP protocol. Two test doubles do most of the work: a **scripted LLM** that returns queued replies and records every request, so every loop branch runs deterministically with no API, and a **fake MCP server** (`tests/fixtures/fake_server.py`), a real stdio server with tools for echo, errors, large output, structured output, slow calls and injected text. The Filesystem server tests are skipped if `npx` is missing.
 - **Live tests** (10) use the real servers. Five call Datakoot directly. Five run the real model against the real Filesystem server in a temp folder. The model tests need `OPENROUTER_API_KEY`, and the Datakoot tests skip when the daily limit is reached.
 
 ## Token optimization
